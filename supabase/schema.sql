@@ -37,15 +37,26 @@ create table if not exists public.tickets (
   brand text not null,
   os text not null,
   imei text,
+  imei2 text,
   iccid text,
+  iccid2 text,
   provider text,
+  service text,
   snap_medicaid text,
   hardship_financing boolean default false,
   hardship_details text,
   notes text,
   credentials jsonb not null default '[]'::jsonb,
+  intake jsonb,
   status text not null default 'Pending',
   priority text not null default 'Normal',
+  eligible_for_unlock boolean default false,
+  magic_link_requested boolean default false,
+  accepted_at timestamptz,
+  estimate_amount numeric,
+  summary text,
+  invoice_status text default 'Estimate. Not final.',
+  invoice_items jsonb default '[]'::jsonb,
   ticket_code text
 );
 
@@ -111,7 +122,87 @@ create policy "client_chat_access" on public.messages for all
     )
   );
 
+-- 📋 Ticket Events (Service Log)
+create table if not exists public.ticket_events (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  ticket_id uuid not null references public.tickets (id) on delete cascade,
+  event_type text not null,
+  note text not null
+);
+
+create index if not exists ticket_events_ticket_id_idx on public.ticket_events (ticket_id);
+alter table public.ticket_events enable row level security;
+
+drop policy if exists "admin_all_ticket_events" on public.ticket_events;
+create policy "admin_all_ticket_events" on public.ticket_events for all 
+  using (auth.jwt() ->> 'email' = 'jmcc5271@gmail.com')
+  with check (auth.jwt() ->> 'email' = 'jmcc5271@gmail.com');
+
+drop policy if exists "client_view_ticket_events" on public.ticket_events;
+create policy "client_view_ticket_events" on public.ticket_events for select
+  using (
+    exists (
+      select 1 from public.tickets
+      where id = public.ticket_events.ticket_id
+      and lower(email) = lower(auth.jwt() ->> 'email')
+    )
+  );
+
+-- 📋 Ticket Files (Attachments & Documents)
+create table if not exists public.ticket_files (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  ticket_id uuid not null references public.tickets (id) on delete cascade,
+  file_name text not null,
+  storage_path text not null
+);
+
+create index if not exists ticket_files_ticket_id_idx on public.ticket_files (ticket_id);
+alter table public.ticket_files enable row level security;
+
+drop policy if exists "admin_all_ticket_files" on public.ticket_files;
+create policy "admin_all_ticket_files" on public.ticket_files for all 
+  using (auth.jwt() ->> 'email' = 'jmcc5271@gmail.com')
+  with check (auth.jwt() ->> 'email' = 'jmcc5271@gmail.com');
+
+drop policy if exists "client_view_ticket_files" on public.ticket_files;
+create policy "client_view_ticket_files" on public.ticket_files for select
+  using (
+    exists (
+      select 1 from public.tickets
+      where id = public.ticket_files.ticket_id
+      and lower(email) = lower(auth.jwt() ->> 'email')
+    )
+  );
+
+-- 🗄️ Storage Buckets
+insert into storage.buckets (id, name, public) 
+values ('ticket-attachments', 'ticket-attachments', true)
+on conflict (id) do nothing;
+
+drop policy if exists "Public access to ticket attachments" on storage.objects;
+create policy "Public access to ticket attachments" on storage.objects
+  for select using (bucket_id = 'ticket-attachments');
+
+drop policy if exists "Allow upload to ticket attachments" on storage.objects;
+create policy "Allow upload to ticket attachments" on storage.objects
+  for insert with check (bucket_id = 'ticket-attachments');
+
+drop policy if exists "Admin full control of ticket attachments" on storage.objects;
+create policy "Admin full control of ticket attachments" on storage.objects
+  for all using (bucket_id = 'ticket-attachments' and auth.jwt() ->> 'email' = 'jmcc5271@gmail.com');
+
 -- Realtime: broadcast inserts/updates/deletes to subscribed clients.
 alter publication supabase_realtime add table public.tickets;
 alter publication supabase_realtime add table public.messages;
 alter publication supabase_realtime add table public.quotes;
+do $$
+begin
+  begin
+    alter publication supabase_realtime add table public.ticket_events;
+  exception when duplicate_object then null; end;
+  begin
+    alter publication supabase_realtime add table public.ticket_files;
+  exception when duplicate_object then null; end;
+end $$;
