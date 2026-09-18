@@ -15,7 +15,6 @@ export default function Home() {
     sb.from('promotions').select('*').eq('active', true).order('created_at', { ascending: false })
       .then(({ data }) => { if (data) setPromotions(data); });
   }, []);
-
   const features = [
     { icon: Smartphone, title: 'Device Setup & Optimization', desc: 'Expert software solutions and device configuration for any device, any platform.' },
     { icon: DollarSign, title: 'Cost-Saving Audit', desc: "Let us find discounts, promotions or trials that save you money! Average savings: $80." },
@@ -53,6 +52,7 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ─── Promo Flyout ─── */}
       {promoOpen && (
         <div className="promo-flyout-overlay" onClick={() => setPromoOpen(false)}>
           <div className="promo-flyout glass-panel" onClick={e => e.stopPropagation()}>
@@ -81,7 +81,11 @@ export default function Home() {
                       </div>
                     )}
                     <Link
-                      to={`/request-info?service=promo-${encodeURIComponent(p.title)}`}
+                      to={
+                        p.title.toLowerCase().includes('audit') ? '/intake?promo=audit' :
+                        p.title.toLowerCase().includes('landline') ? '/intake?promo=landline' :
+                        `/request-info?service=promo-${encodeURIComponent(p.title)}`
+                      }
                       className="button small-btn promo-cta"
                       onClick={() => setPromoOpen(false)}
                     >
@@ -95,43 +99,46 @@ export default function Home() {
         </div>
       )}
 
+      {/* ─── Main Content Area with Sidebar ─── */}
       <div className="page-container">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4rem' }}>
+          
           <section className="features">
-            <h2 className="section-title">How We Help You</h2>
-            <div className="features-grid">
-              {features.map((feature, idx) => {
-                const Icon = feature.icon;
-                return (
-                  <div key={idx} className="glass-panel feature-card">
-                    <div className="feature-icon-wrapper">
-                      <Icon size={32} className="feature-icon" />
-                    </div>
-                    <h3>{feature.title}</h3>
-                    <p>{feature.desc}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <section style={{ paddingTop: 0 }}>
-            <div className="glass-panel" style={{ padding: '3rem', position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--primary)', background: 'linear-gradient(135deg, rgba(20,20,20,0.8), rgba(249,115,22,0.03))' }}>
-              <div style={{ position: 'absolute', right: '-20px', top: '-20px', opacity: 0.05, transform: 'rotate(15deg)' }}>
-                <Shield size={200} />
+        <h2 className="section-title">How We Help You</h2>
+        <div className="features-grid">
+          {features.map((feature, idx) => {
+            const Icon = feature.icon;
+            return (
+              <div key={idx} className="glass-panel feature-card">
+                <div className="feature-icon-wrapper">
+                  <Icon size={32} className="feature-icon" />
+                </div>
+                <h3>{feature.title}</h3>
+                <p>{feature.desc}</p>
               </div>
-              <h2 style={{ fontSize: '1.75rem', marginBottom: '1.5rem', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <Users size={28} style={{ color: 'var(--primary)' }} />
-                From Paramedicine to Personal Tech
-              </h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', lineHeight: 1.7, marginBottom: '1rem', maxWidth: '800px' }}>
-                Many of you in Confluence already know me from my years serving as a local paramedic. As I transition into this new career, my core mission hasn't changed: <strong style={{ color: '#e2e8f0' }}>supporting my neighbors when they need it most.</strong>
-              </p>
-              <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', lineHeight: 1.7, maxWidth: '800px' }}>
-                The skills I utilized in EMS—rapid problem-solving, calm troubleshooting, and genuine care—transfer directly to resolving your tech issues. While 6th Sense Personal is about standardizing my services and pricing for consistency, I remain committed to our community. I still offer the same local, familiar, and trustworthy support, always considering individual cases and extenuating circumstances.
-              </p>
-            </div>
-          </section>
+            );
+          })}
+        </div>
+      </section>
+
+      <section style={{ paddingTop: 0 }}>
+        <div className="glass-panel" style={{ padding: '3rem', position: 'relative', overflow: 'hidden', borderLeft: '4px solid var(--primary)', background: 'linear-gradient(135deg, rgba(20,20,20,0.8), rgba(249,115,22,0.03))' }}>
+          <div style={{ position: 'absolute', right: '-20px', top: '-20px', opacity: 0.05, transform: 'rotate(15deg)' }}>
+            <Shield size={200} />
+          </div>
+          <h2 style={{ fontSize: '1.75rem', marginBottom: '1.5rem', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <Users size={28} style={{ color: 'var(--primary)' }} />
+            From Paramedicine to Personal Tech
+          </h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', lineHeight: 1.7, marginBottom: '1rem', maxWidth: '800px' }}>
+            Many of you in Confluence already know me from my years serving as a local paramedic. As I transition into this new career, my core mission hasn't changed: <strong style={{ color: '#e2e8f0' }}>supporting my neighbors when they need it most.</strong>
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', lineHeight: 1.7, maxWidth: '800px' }}>
+            The skills I utilized in EMS—rapid problem-solving, calm troubleshooting, and genuine care—transfer directly to resolving your tech issues. While 6th Sense Personal is about standardizing my services and pricing for consistency, I remain committed to our community. I still offer the same local, familiar, and trustworthy support, always considering individual cases and extenuating circumstances.
+          </p>
+        </div>
+      </section>
+
         </div>
       </div>
     </div>

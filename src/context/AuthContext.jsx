@@ -24,7 +24,7 @@ export function AuthProvider({ children }) {
       data: { subscription },
     } = sb.auth.onAuthStateChange((event, s) => {
       setSession(s);
-
+      
       // Auto-redirect if we just landed from a recovery email
       if (event === 'PASSWORD_RECOVERY') {
         window.location.href = '/reset-password';

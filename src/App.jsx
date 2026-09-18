@@ -14,21 +14,24 @@ import Policies from './pages/Policies';
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Layout><Home /></Layout>} />
-      <Route path="/services" element={<Layout><Services /></Layout>} />
-      <Route path="/request-info" element={<Layout><QuoteRequest /></Layout>} />
-      <Route path="/policies" element={<Layout><Policies /></Layout>} />
-      <Route path="/intake" element={<Layout><IntakeForm /></Layout>} />
-      <Route path="/success" element={<Layout><SuccessPage /></Layout>} />
-      <Route path="/portal/*" element={<Layout><ClientDashboard /></Layout>} />
-      <Route path="/reset-password" element={<ResetPassword />} />
-      {/* Protected Technician Routes */}
-      <Route path="/login" element={<TechLogin />} />
-      <Route element={<ProtectedRoute adminOnly={true} />}>
-        <Route path="/tech/*" element={<TechDashboard />} />
-      </Route>
-    </Routes>
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/services" element={<Services />} />
+        <Route path="/request-info" element={<QuoteRequest />} />
+        <Route path="/policies" element={<Policies />} />
+        <Route path="/intake" element={<IntakeForm />} />
+        <Route path="/success" element={<SuccessPage />} />
+        <Route path="/portal/*" element={<ClientDashboard />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        
+        {/* Protected Technician Routes */}
+        <Route path="/login" element={<TechLogin />} />
+        <Route element={<ProtectedRoute adminOnly={true} />}>
+          <Route path="/tech/*" element={<TechDashboard />} />
+        </Route>
+      </Routes>
+    </Layout>
   );
 }
 

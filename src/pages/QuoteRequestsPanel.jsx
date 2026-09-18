@@ -8,8 +8,10 @@ import { generateTicketCode } from '../lib/ticketCode';
 import { formatPhone } from '../lib/formatPhone';
 import './TechDashboard.css';
 
+// Statuses that need action vs. resolved
 const ACTION_STATUSES = ['Pending', 'Estimated', 'Authorized'];
 
+// Request type display names
 const REQUEST_TYPE_LABELS = {
   price_quote: 'Custom Quotes',
   general_info: 'General Repair Questions',
@@ -21,7 +23,7 @@ const REQUEST_TYPE_ACCENTS = {
   status_update: '#f59e0b',
 };
 
-function StatusGroup({ title, quotes, onSelect, onDelete, defaultOpen = false, accent }) {
+function StatusGroup({ title, quotes, onSelect, defaultOpen = false, accent }) {
   const [open, setOpen] = useState(defaultOpen);
   if (!quotes.length) return null;
   return (
@@ -50,7 +52,6 @@ function StatusGroup({ title, quotes, onSelect, onDelete, defaultOpen = false, a
                 <th>Service</th>
                 <th>Priority</th>
                 <th>Estimate</th>
-                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -73,7 +74,7 @@ function StatusGroup({ title, quotes, onSelect, onDelete, defaultOpen = false, a
                     {new Date(q.created_at).toLocaleDateString()}
                   </td>
                   <td>
-                    <span className={`status-badge ${q.status.toLowerCase().replace(/ /g, '-')}`}>
+                    <span className={`status-badge ${(q.status || 'pending').toLowerCase().replace(/ /g, '-')}`}>
                       {q.status}
                     </span>
                   </td>
@@ -90,18 +91,6 @@ function StatusGroup({ title, quotes, onSelect, onDelete, defaultOpen = false, a
                     </span>
                   </td>
                   <td>{q.estimate_amount ? `$${q.estimate_amount}` : '—'}</td>
-                  <td>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete(q);
-                      }}
-                      className="icon-button text-error"
-                      title="Delete quote request"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -112,7 +101,7 @@ function StatusGroup({ title, quotes, onSelect, onDelete, defaultOpen = false, a
   );
 }
 
-function RequestTypeGroup({ requestType, quotes, onSelect, onDelete }) {
+function RequestTypeGroup({ requestType, quotes, onSelect }) {
   const [open, setOpen] = useState(true);
   const label = REQUEST_TYPE_LABELS[requestType] || requestType;
   const accent = REQUEST_TYPE_ACCENTS[requestType] || '#94a3b8';
@@ -150,13 +139,13 @@ function RequestTypeGroup({ requestType, quotes, onSelect, onDelete }) {
 
       {open && (
         <div style={{ paddingLeft: '0.5rem' }}>
-          <StatusGroup title="Needs Action" quotes={actionQuotes} onSelect={onSelect} onDelete={onDelete} defaultOpen={true} accent="#ff6b00" />
-          <StatusGroup title="Replied" quotes={repliedQuotes} onSelect={onSelect} onDelete={onDelete} defaultOpen={false} accent="#888888" />
-          <StatusGroup title="Converted" quotes={convertedQuotes} onSelect={onSelect} onDelete={onDelete} defaultOpen={false} accent="#10b981" />
-          <StatusGroup title="On Hold" quotes={onHoldQuotes} onSelect={onSelect} onDelete={onDelete} defaultOpen={false} accent="#fbbf24" />
-          <StatusGroup title="Cancelled" quotes={cancelledQuotes} onSelect={onSelect} onDelete={onDelete} defaultOpen={false} accent="#f87171" />
+          <StatusGroup title="Needs Action" quotes={actionQuotes} onSelect={onSelect} defaultOpen={true} accent="#ff6b00" />
+          <StatusGroup title="Replied" quotes={repliedQuotes} onSelect={onSelect} defaultOpen={false} accent="#888888" />
+          <StatusGroup title="Converted" quotes={convertedQuotes} onSelect={onSelect} defaultOpen={false} accent="#10b981" />
+          <StatusGroup title="On Hold" quotes={onHoldQuotes} onSelect={onSelect} defaultOpen={false} accent="#fbbf24" />
+          <StatusGroup title="Cancelled" quotes={cancelledQuotes} onSelect={onSelect} defaultOpen={false} accent="#f87171" />
           {otherQuotes.length > 0 && (
-            <StatusGroup title="Other" quotes={otherQuotes} onSelect={onSelect} onDelete={onDelete} defaultOpen={false} accent="#cbd5e1" />
+            <StatusGroup title="Other" quotes={otherQuotes} onSelect={onSelect} defaultOpen={false} accent="#cbd5e1" />
           )}
         </div>
       )}
@@ -172,6 +161,7 @@ export default function QuoteRequestsPanel() {
   const [search, setSearch] = useState('');
   const [selectedQuote, setSelectedQuote] = useState(null);
 
+  // Action states
   const [techResponse, setTechResponse] = useState('');
   const [estimateAmount, setEstimateAmount] = useState('');
   const [updating, setUpdating] = useState(false);
@@ -215,19 +205,6 @@ export default function QuoteRequestsPanel() {
     }
   };
 
-  const handleDelete = async (quote) => {
-    if (!window.confirm(`Delete quote request from ${quote.name}?`)) return;
-    try {
-      await deleteQuote(quote.id);
-      await load();
-      if (selectedQuote?.id === quote.id) {
-        setSelectedQuote(null);
-      }
-    } catch (err) {
-      alert(err.message || 'Failed to delete quote');
-    }
-  };
-
   const handleReply = async (e) => {
     e.preventDefault();
     if (!techResponse.trim()) return;
@@ -249,6 +226,21 @@ export default function QuoteRequestsPanel() {
       : `Move this request to ${newStatus}?`;
     if (!window.confirm(confirmMsg)) return;
     await handleUpdate({ status: newStatus });
+  };
+
+  const handleDeleteQuote = async () => {
+    if (!selectedQuote) return;
+    if (!window.confirm('Are you sure you want to permanently delete this request? This action cannot be undone.')) return;
+    setUpdating(true);
+    try {
+      await deleteQuote(selectedQuote.id);
+      setSelectedQuote(null);
+      await load();
+    } catch (err) {
+      alert(err.message || 'Failed to delete request');
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const generateTicketAction = async () => {
@@ -294,11 +286,13 @@ export default function QuoteRequestsPanel() {
     );
   });
 
+  // Group by request type
   const requestTypes = ['price_quote', 'general_info', 'status_update'];
   const groupedByType = {};
   requestTypes.forEach(type => {
     groupedByType[type] = filtered.filter(q => q.request_type === type);
   });
+  // Catch any with unknown request types
   const otherType = filtered.filter(q => !requestTypes.includes(q.request_type));
 
   return (
@@ -338,7 +332,6 @@ export default function QuoteRequestsPanel() {
               requestType={type}
               quotes={groupedByType[type]}
               onSelect={setSelectedQuote}
-              onDelete={handleDelete}
             />
           ))}
           {otherType.length > 0 && (
@@ -346,7 +339,6 @@ export default function QuoteRequestsPanel() {
               requestType="Other"
               quotes={otherType}
               onSelect={setSelectedQuote}
-              onDelete={handleDelete}
             />
           )}
         </>
@@ -377,8 +369,8 @@ export default function QuoteRequestsPanel() {
             </div>
             <div className="flex gap-2">
               <select
-                className={`status-badge big ${selectedQuote.status.toLowerCase().replace(/ /g, '-')}`}
-                value={selectedQuote.status}
+                className={`status-badge big ${(selectedQuote.status || 'pending').toLowerCase().replace(/ /g, '-')}`}
+                value={selectedQuote.status || 'Pending'}
                 onChange={(e) => handleStatusUpdate(e.target.value)}
                 disabled={updating}
                 style={{ cursor: 'pointer', border: 'none', appearance: 'none', textAlign: 'center' }}
@@ -387,10 +379,14 @@ export default function QuoteRequestsPanel() {
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
               </select>
+              <button onClick={handleDeleteQuote} className="button secondary small-btn" style={{ borderColor: '#ef4444', color: '#ef4444' }} disabled={updating} title="Delete Request">
+                <Trash2 size={16} />
+              </button>
             </div>
           </div>
 
           <div className="ticket-detail-grid mt-6">
+            {/* Left Column */}
             <div className="flex flex-col gap-6">
               <div className="detail-panel glass-panel">
                 <h3><User size={18} className="panel-icon" /> Contact Details</h3>
@@ -461,6 +457,7 @@ export default function QuoteRequestsPanel() {
               </div>
             </div>
 
+            {/* Right Column */}
             <div className="flex flex-col gap-6 span-2">
               <div className="detail-panel glass-panel description-panel">
                 <div className="flex justify-between items-center mb-4">
@@ -470,43 +467,49 @@ export default function QuoteRequestsPanel() {
                   </span>
                 </div>
                 {selectedQuote.service && (
-                  <div className="info-item mb-3">
+                  <div className="info-item mb-4">
                     <label>Service Requested</label>
-                    <p style={{ fontWeight: 600, color: 'var(--primary)' }}>{formatJobType(selectedQuote.service)}</p>
+                    <p style={{color:'#10b981', fontWeight:600}}>{formatJobType(selectedQuote.service)}</p>
                   </div>
                 )}
-                <p style={{ whiteSpace: 'pre-wrap' }}>{selectedQuote.description || <span className="text-muted">No description provided.</span>}</p>
-                {selectedQuote.tech_response && (
-                  <div className="mt-4">
-                    <h4 className="text-muted text-sm mb-2">Your Last Response</h4>
-                    <p className="text-sm italic">{selectedQuote.tech_response}</p>
+                <div className="notes-box min-h-[120px]">
+                  {selectedQuote.description || <span className="text-muted">No description provided.</span>}
+                </div>
+              </div>
+
+              {selectedQuote.tech_response && (
+                <div className="detail-panel glass-panel response-panel border-accent">
+                  <h3><MessageSquare size={18} className="panel-icon" /> Your Last Response</h3>
+                  <div className="notes-box mt-3 bg-accent/10">
+                    {selectedQuote.tech_response}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
-              <div className="detail-panel glass-panel">
-                <h4 className="mb-3">Send Reply</h4>
-                <form onSubmit={handleReply} className="flex flex-col gap-3">
-                  <textarea
-                    className="form-input text-sm mb-2"
-                    rows="3"
-                    placeholder="Type your response here..."
-                    value={techResponse}
-                    onChange={e => setTechResponse(e.target.value)}
-                  ></textarea>
-                  <button type="submit" className="button small-btn" disabled={updating || !techResponse.trim()}>
-                    <MessageSquare size={14} /> Mark as Replied
-                  </button>
-                </form>
-              </div>
+              <div className="actions-grid">
+                {/* Reply */}
+                <div className="action-card glass-panel">
+                  <h4><MessageSquare size={16} /> Send Reply</h4>
+                  <form onSubmit={handleReply} className="mt-3">
+                    <textarea
+                      className="form-input text-sm mb-2"
+                      rows="3"
+                      placeholder="Type your response here..."
+                      value={techResponse}
+                      onChange={e => setTechResponse(e.target.value)}
+                    ></textarea>
+                    <button type="submit" className="button small-btn w-full" disabled={updating || !techResponse.trim()}>
+                      Mark as Replied
+                    </button>
+                  </form>
+                </div>
 
-              <div className="detail-panel glass-panel">
-                <h4 className="mb-3">Set Estimate</h4>
-                <form onSubmit={handleSetEstimate} className="flex gap-2 items-end">
-                  <div className="form-group flex-1">
-                    <label className="form-label text-xs">Amount</label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted">$</span>
+                {/* Estimate */}
+                <div className="action-card glass-panel">
+                  <h4><DollarSign size={16} /> Set Estimate</h4>
+                  <form onSubmit={handleSetEstimate} className="mt-3">
+                    <div className="flex gap-2 mb-2">
+                      <span className="currency-prefix">$</span>
                       <input
                         type="number"
                         step="0.01"
@@ -516,34 +519,48 @@ export default function QuoteRequestsPanel() {
                         onChange={e => setEstimateAmount(e.target.value)}
                       />
                     </div>
-                  </div>
-                  <button type="submit" className="button small-btn" disabled={updating || !estimateAmount}>
-                    <DollarSign size={14} /> Update Quote
-                  </button>
-                </form>
-                {selectedQuote.estimate_amount && (
-                  <p className="text-muted text-sm mt-2">Current: ${selectedQuote.estimate_amount}</p>
-                )}
-              </div>
+                    <button type="submit" className="button secondary small-btn w-full" disabled={updating || !estimateAmount}>
+                      Update Quote
+                    </button>
+                  </form>
+                  {selectedQuote.estimate_amount && (
+                    <p className="mt-2 text-xs text-center text-muted">Current: ${selectedQuote.estimate_amount}</p>
+                  )}
+                </div>
 
-              <div className="detail-panel glass-panel">
-                <h4 className="mb-3">Management</h4>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={generateTicketAction} className="button small-btn flex items-center justify-center gap-2" disabled={updating}>
-                    <Ticket size={14} /> Generate Ticket
-                  </button>
-                  <button onClick={() => handleStatusUpdate('On Hold')} className="button secondary small-btn flex items-center justify-center gap-2" disabled={updating || selectedQuote.status === 'On Hold'}>
-                    <Pause size={14} /> Put on Hold
-                  </button>
-                  <button onClick={() => handleStatusUpdate('Cancelled')} className="button secondary small-btn flex items-center justify-center gap-2 text-red-400" disabled={updating || selectedQuote.status === 'Cancelled'}>
-                    <Ban size={14} /> Cancel Request
-                  </button>
-                  <button onClick={generateIntakeForm} className="button secondary small-btn flex items-center justify-center gap-2">
-                    <FileInput size={14} /> Send Intake Form
-                  </button>
-                  <button onClick={() => handleDelete(selectedQuote)} className="button secondary small-btn flex items-center justify-center gap-2 text-red-400">
-                    <Trash2 size={14} /> Delete Quote
-                  </button>
+                {/* Management Actions */}
+                <div className="action-card glass-panel">
+                  <h4><Shield size={16} /> Management</h4>
+                  <div className="flex flex-col gap-2 mt-3">
+                    <button
+                      onClick={generateTicketAction}
+                      className="button primary small-btn flex items-center justify-center gap-2"
+                      disabled={updating || selectedQuote.status === 'Converted'}
+                    >
+                      <Ticket size={16} /> Generate Ticket
+                    </button>
+                    <button
+                      onClick={() => handleStatusUpdate('On Hold')}
+                      className="button secondary small-btn flex items-center justify-center gap-2"
+                      disabled={updating || selectedQuote.status === 'On Hold'}
+                    >
+                      <Pause size={16} /> Put on Hold
+                    </button>
+                    <button
+                      onClick={() => handleStatusUpdate('Cancelled')}
+                      className="button secondary small-btn flex items-center justify-center gap-2 text-red-400"
+                      disabled={updating || selectedQuote.status === 'Cancelled'}
+                    >
+                      <Ban size={16} /> Cancel Request
+                    </button>
+                    <button
+                      onClick={generateIntakeForm}
+                      className="button secondary small-btn flex items-center justify-center gap-2"
+                      disabled={updating}
+                    >
+                      <FileInput size={16} /> Send Intake Form
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

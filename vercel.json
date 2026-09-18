@@ -1,6 +1,3 @@
 {
-  "rewrites": [
-    { "source": "/src/assets/logo.jpg", "destination": "/logo.png" },
-    { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }

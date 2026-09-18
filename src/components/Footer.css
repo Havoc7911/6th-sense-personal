@@ -1,0 +1,36 @@
+/* Footer Styles */
+.footer {
+  background: rgba(10, 10, 10, 0.98);
+  border-top: 1px solid var(--glass-border);
+  padding: 4rem 2rem 2rem;
+  margin-top: 4rem;
+}
+
+.footer-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2rem;
+}
+
+.footer-section h3, .footer-section h4 {
+  color: var(--text-main);
+  margin-bottom: 1rem;
+}
+
+.footer-section p {
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.footer-bottom {
+  max-width: 1200px;
+  margin: 2rem auto 0;
+  padding-top: 2rem;
+  border-top: 1px solid var(--glass-border);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}

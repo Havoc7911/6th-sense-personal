@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Home, Wrench, FileText, User, LayoutDashboard } from 'lucide-react';
+import logo from '../assets/logo.jpg';
 import './Navbar.css';
 
 export default function Navbar() {
@@ -14,14 +15,10 @@ export default function Navbar() {
   ];
 
   return (
-    <div className="navbar">
+    <nav className="navbar">
       <div className="navbar-container">
         <Link to="/" className="navbar-logo">
-          <img 
-            src="/logo.png"
-            alt="6th Sense Personal Logo" 
-            style={{ height: '40px', width: 'auto' }} 
-          />
+          <img src={logo} alt="6th Sense Personal Logo" style={{ height: '40px', width: 'auto' }} />
         </Link>
         <div className="nav-links">
           {navLinks.map((link) => {
@@ -34,12 +31,12 @@ export default function Navbar() {
                 className={`nav-link ${isActive ? 'active' : ''}`}
               >
                 <Icon size={18} />
-                {link.name}
+                <span>{link.name}</span>
               </Link>
             );
           })}
         </div>
       </div>
-    </div>
+    </nav>
   );
 }
