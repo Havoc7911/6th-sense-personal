@@ -3,7 +3,7 @@ import {
   Search, Filter, AlertCircle, FileText, Smartphone, Shield, Database,
   Power, MessageSquare, ClipboardList, Plus, Clock, Paperclip, Download,
   ReceiptText, FileCheck, ChevronDown, ChevronUp, ChevronRight, Unlock, X, Tag, Megaphone,
-  Pencil, Trash2, ToggleLeft, ToggleRight, User, ArrowRight
+  Pencil, Trash2, ToggleLeft, ToggleRight, User, ArrowRight, Printer, Copy, Check, CreditCard
 } from 'lucide-react';
 import QuoteRequestsPanel from './QuoteRequestsPanel';
 import {
@@ -23,6 +23,7 @@ import {
   updateTicketSummary,
   updateTicketInfo,
   generateInvoicePrint,
+  generateServiceSummaryPrint,
   fetchAllPromotions,
   insertPromotion,
   updatePromotion,
@@ -236,14 +237,169 @@ function mapRowToTicket(row) {
       os: row.os,
       provider: row.provider,
       imei: row.imei,
+      imei2: row.imei2 || row.intake?.imei2,
       iccid: row.iccid,
+      iccid2: row.iccid2 || row.intake?.iccid2,
       notes: row.notes,
       credentials: Array.isArray(row.credentials) ? row.credentials : [],
       eligibleForUnlock: row.eligible_for_unlock,
+      rawIntake: row.intake || {},
     },
     magicLinkRequested: !!row.magic_link_requested,
     invoiceStatus: row.invoice_status,
     invoiceItems: Array.isArray(row.invoice_items) ? row.invoice_items : [],
+  };
+}
+
+function parseIntakeData(ticket) {
+  if (!ticket) return { lines: [], cleanNotes: '' };
+  const rawIntake = ticket.intake?.rawIntake || ticket.raw?.intake || {};
+  const notes = ticket.intake?.notes || ticket.raw?.notes || '';
+
+  let lines = [];
+  if (Array.isArray(rawIntake.lines) && rawIntake.lines.length > 0) {
+    lines = rawIntake.lines.map((l, i) => ({
+      id: l.id || i + 1,
+      type: l.type || 'Smartphone',
+      brand: l.brand || '',
+      model: l.model || '',
+      os: l.os || '',
+      provider: l.provider === 'Other' ? (l.otherProvider || 'Other') : (l.provider || ''),
+      imei: l.imei || '',
+      imei2: l.imei2 || '',
+      iccid: l.iccid || '',
+      iccid2: l.iccid2 || '',
+      simType: l.simType || '',
+      lockStatus: l.lockStatus || '',
+      amountOwed: l.amountOwed || '',
+      upgradeEligible: l.upgradeEligible || '',
+      managed: l.managed || '',
+      planType: l.planType || '',
+      planName: l.planName || '',
+      dataAllowance: l.dataAllowance || '',
+      planPrice: l.planPrice || '',
+      serviceStatus: l.serviceStatus || '',
+      phoneNumber: l.phoneNumber || '',
+      hasServicePin: !!l.hasServicePin,
+      servicePin: l.servicePin || '',
+      servicePinPlan: l.servicePinPlan || '',
+      servicePinPrice: l.servicePinPrice || '',
+      servicePinProvider: l.servicePinProvider || '',
+      hasSimKit: !!l.hasSimKit,
+    }));
+  } else {
+    lines = [{
+      id: 1,
+      type: ticket.intake?.deviceType || ticket.raw?.device_type || 'Device',
+      brand: ticket.intake?.brand || ticket.raw?.brand || '',
+      model: rawIntake.model || '',
+      os: ticket.intake?.os || ticket.raw?.os || '',
+      provider: ticket.intake?.provider || ticket.raw?.provider || '',
+      imei: ticket.intake?.imei || ticket.raw?.imei || '',
+      imei2: ticket.intake?.imei2 || ticket.raw?.imei2 || rawIntake.imei2 || '',
+      iccid: ticket.intake?.iccid || ticket.raw?.iccid || '',
+      iccid2: ticket.intake?.iccid2 || ticket.raw?.iccid2 || rawIntake.iccid2 || '',
+      simType: rawIntake.simType || '',
+      lockStatus: rawIntake.lockStatus || '',
+      amountOwed: rawIntake.amountOwed || '',
+      upgradeEligible: rawIntake.upgradeEligible || '',
+      managed: rawIntake.managed || '',
+      planType: rawIntake.planType || '',
+      planName: rawIntake.planName || '',
+      dataAllowance: rawIntake.dataAllowance || '',
+      planPrice: rawIntake.planPrice || '',
+      serviceStatus: rawIntake.serviceStatus || '',
+      phoneNumber: rawIntake.phoneNumber || '',
+      hasServicePin: !!rawIntake.hasServicePin,
+      servicePin: rawIntake.servicePin || '',
+      servicePinPlan: rawIntake.servicePinPlan || '',
+      servicePinPrice: rawIntake.servicePinPrice || '',
+      servicePinProvider: rawIntake.servicePinProvider || '',
+      hasSimKit: !!rawIntake.hasSimKit,
+    }];
+  }
+
+  let portingDetails = null;
+  let auditDetails = null;
+  let cleanNotes = notes;
+
+  if (notes.includes('--- Mobile Service Details ---') || notes.includes('--- Porting Details ---')) {
+    const portMatch = notes.match(/--- (?:Mobile Service Details|Porting Details) ---([\s\S]*?)(?=---|$)/);
+    if (portMatch) {
+      portingDetails = portMatch[1].trim();
+      cleanNotes = cleanNotes.replace(portMatch[0], '');
+    }
+  }
+
+  if (notes.includes('--- Audit Questionnaire Details ---')) {
+    const auditMatch = notes.match(/--- Audit Questionnaire Details ---([\s\S]*?)(?=---|$)/);
+    if (auditMatch) {
+      auditDetails = auditMatch[1].trim();
+      cleanNotes = cleanNotes.replace(auditMatch[0], '');
+    }
+  }
+
+  if (notes.includes('--- Per-Line Device & Service Details ---')) {
+    const lineMatch = notes.match(/--- Per-Line Device & Service Details ---([\s\S]*?)(?=---|$)/);
+    if (lineMatch) {
+      if (!rawIntake.lines || rawIntake.lines.length === 0) {
+        const lineText = lineMatch[1];
+        const parsedLines = [];
+        const rawLineChunks = lineText.split(/Line\s+\d+:/i).filter(Boolean);
+        rawLineChunks.forEach((chunk, i) => {
+          const l = { id: i + 1 };
+          const imei1M = chunk.match(/IMEI\s*1:\s*([^|\n]+)/i);
+          if (imei1M && !ime1M[1].includes('N/A')) l.imei = imei1M[1].trim();
+          const imei2M = chunk.match(/IMEI\s*2:\s*([^|\n]+)/i);
+          if (imei2M) l.imei2 = imei2M[1].trim();
+          const iccid1M = chunk.match(/ICCID\s*1:\s*([^|\n]+)/i);
+          if (iccid1M && !iccid1M[1].includes('N/A')) l.iccid = iccid1M[1].trim();
+          const iccid2M = chunk.match(/ICCID\s*2:\s*([^|\n]+)/i);
+          if (iccid2M) l.iccid2 = iccid2M[1].trim();
+          const provM = chunk.match(/Provider:\s*([^|\n]+)/i);
+          if (provM && !provM[1].includes('N/A')) l.provider = provM[1].trim();
+          const lockM = chunk.match(/Lock:\s*([^|\n]+)/i);
+          if (lockM && !lockM[1].includes('N/A')) l.lockStatus = lockM[1].trim();
+          const simM = chunk.match(/SIM:\s*([^|\n]+)/i);
+          if (simM && !simM[1].includes('N/A')) l.simType = simM[1].trim();
+          const pinM = chunk.match(/Service Card PIN:\s*([^(\]\n]+)/i);
+          if (pinM) { l.hasServicePin = true; l.servicePin = pinM[1].trim(); }
+          if (chunk.includes('[SIM Kit: Yes]')) l.hasSimKit = true;
+          const planM = chunk.match(/Plan Details:\s*([^\n]+)/i);
+          if (planM) {
+            const pd = planM[1];
+            const pPhone = pd.match(/Phone:\s*([^|]+)/i);
+            if (pPhone) l.phoneNumber = pPhone[1].trim();
+            const pType = pd.match(/Plan Type:\s*([^|]+)/i);
+            if (pType) l.planType = pType[1].trim();
+            const pPlan = pd.match(/Plan:\s*([^|]+)/i);
+            if (pPlan) l.planName = pPlan[1].trim();
+            const pData = pd.match(/Data:\s*([^|]+)/i);
+            if (pData) l.dataAllowance = pData[1].trim();
+            const pCost = pd.match(/Cost:\s*([^|]+)/i);
+            if (pCost) l.planPrice = pCost[1].trim();
+            const pStat = pd.match(/Status:\s*([^|]+)/i);
+            if (pStat) l.serviceStatus = pStat[1].trim();
+          }
+          parsedLines.push({ ...lines[0], ...l });
+        });
+        if (parsedLines.length > 0) lines = parsedLines;
+      }
+      cleanNotes = cleanNotes.replace(lineMatch[0], '');
+    }
+  }
+
+  cleanNotes = cleanNotes.trim();
+
+  return {
+    lines,
+    portingDetails,
+    auditDetails,
+    cleanNotes,
+    eligibleForUnlock: ticket.intake?.eligibleForUnlock || ticket.raw?.eligible_for_unlock,
+    hardshipFinancing: ticket.raw?.hardship_financing,
+    snapMedicaid: ticket.raw?.snap_medicaid,
+    hardshipDetails: ticket.raw?.hardship_details,
   };
 }
 
@@ -456,7 +612,15 @@ function SummaryModal({ ticket, events, onClose, onSave }) {
           <button className="button w-full" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving…' : 'Save Summary'}
           </button>
-          <button className="button secondary w-full" onClick={onClose}>Cancel</button>
+          <button
+            type="button"
+            className="button secondary w-full flex items-center justify-center gap-2"
+            onClick={() => generateServiceSummaryPrint(ticket, text, events)}
+            title="Generate Branded Document for Print or PDF Save"
+          >
+            <Printer size={16} /> Print / Save PDF
+          </button>
+          <button className="button secondary w-full" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>
@@ -524,10 +688,24 @@ export default function TechDashboard() {
   const [intakeForm, setIntakeForm] = useState({});
   const [savingIntake, setSavingIntake] = useState(false);
 
-  // Invoice
+  // Invoice & Payment
   const [invoiceFormItems, setInvoiceFormItems] = useState([]);
   const [invoiceStatus, setInvoiceStatus] = useState('Estimate. Not final.');
   const [savingInvoice, setSavingInvoice] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({
+    name: '',
+    paymentType: 'Card',
+    account: '',
+    amount: '',
+  });
+  const [copiedFieldId, setCopiedFieldId] = useState(null);
+
+  const handleCopyText = (text, id) => {
+    if (!text || text === 'N/A' || text === '—') return;
+    navigator.clipboard.writeText(text);
+    setCopiedFieldId(id);
+    setTimeout(() => setCopiedFieldId(null), 2000);
+  };
 
   // Summary modal
   const [showSummary, setShowSummary] = useState(false);
@@ -600,12 +778,28 @@ export default function TechDashboard() {
       return;
     }
     
-    // Sync Invoice Editor State
+    // Sync Invoice & Payment Editor State
     setInvoiceStatus(selectedTicket.invoiceStatus || 'Estimate. Not final.');
-    setInvoiceFormItems(selectedTicket.invoiceItems && selectedTicket.invoiceItems.length > 0
+    const allItems = selectedTicket.invoiceItems && selectedTicket.invoiceItems.length > 0
         ? JSON.parse(JSON.stringify(selectedTicket.invoiceItems))
-        : []
-    );
+        : [];
+    const paymentItem = allItems.find(it => it.__isPayment || it.isPayment);
+    if (paymentItem) {
+      setPaymentForm({
+        name: paymentItem.name || paymentItem.payerName || selectedTicket.client || '',
+        paymentType: paymentItem.paymentType || paymentItem.type || 'Card',
+        account: paymentItem.account || '',
+        amount: paymentItem.amount || '',
+      });
+    } else {
+      setPaymentForm({
+        name: selectedTicket.client || '',
+        paymentType: 'Card',
+        account: '',
+        amount: '',
+      });
+    }
+    setInvoiceFormItems(allItems.filter(it => !it.__isPayment && !it.isPayment));
 
     fetchTicketEvents(selectedTicket.id).then(setEvents).catch(() => setEvents([]));
     fetchTicketFiles(selectedTicket.id).then(setFiles).catch(() => setFiles([]));
@@ -920,14 +1114,15 @@ export default function TechDashboard() {
         brand: intakeForm.brand,
         os: intakeForm.os,
         provider: intakeForm.provider,
-        imei: intakeForm.imei,
-        iccid: intakeForm.iccid,
+        imei: intakeForm.imei || null,
+        iccid: intakeForm.iccid || null,
         notes: intakeForm.notes,
         eligible_for_unlock: intakeForm.eligibleForUnlock === 'yes' ? true : intakeForm.eligibleForUnlock === 'no' ? false : null,
       };
       await updateTicketInfo(selectedTicket.id, dbPayload);
       setEditingIntake(false);
       loadTickets(); // Refresh tickets to show updated info
+      alert('Intake details updated successfully!');
     } catch (err) {
       alert(err.message || 'Could not save intake information');
     } finally {
@@ -936,29 +1131,52 @@ export default function TechDashboard() {
   };
 
   const startEditIntake = () => {
+    const rawIntake = selectedTicket.raw?.intake || {};
     setIntakeForm({
-      deviceType: selectedTicket.intake.deviceType || '',
-      brand: selectedTicket.intake.brand || '',
-      os: selectedTicket.intake.os || '',
-      provider: selectedTicket.intake.provider || '',
-      imei: selectedTicket.intake.imei || '',
-      iccid: selectedTicket.intake.iccid || '',
-      notes: selectedTicket.intake.notes || '',
-      eligibleForUnlock: selectedTicket.intake.eligibleForUnlock === true ? 'yes' : selectedTicket.intake.eligibleForUnlock === false ? 'no' : 'unsure'
+      deviceType: selectedTicket.intake.deviceType || selectedTicket.raw?.device_type || '',
+      brand: selectedTicket.intake.brand || selectedTicket.raw?.brand || '',
+      model: rawIntake.model || '',
+      os: selectedTicket.intake.os || selectedTicket.raw?.os || '',
+      provider: selectedTicket.intake.provider || selectedTicket.raw?.provider || '',
+      imei: selectedTicket.intake.imei || selectedTicket.raw?.imei || '',
+      imei2: selectedTicket.intake.imei2 || selectedTicket.raw?.imei2 || rawIntake.imei2 || '',
+      iccid: selectedTicket.intake.iccid || selectedTicket.raw?.iccid || '',
+      iccid2: selectedTicket.intake.iccid2 || selectedTicket.raw?.iccid2 || rawIntake.iccid2 || '',
+      lockStatus: rawIntake.lockStatus || '',
+      notes: selectedTicket.intake.notes || selectedTicket.raw?.notes || '',
+      eligibleForUnlock: selectedTicket.intake.eligibleForUnlock === true ? 'yes' : selectedTicket.intake.eligibleForUnlock === false ? 'no' : 'unsure',
+      planType: rawIntake.planType || '',
+      planName: rawIntake.planName || '',
+      dataAllowance: rawIntake.dataAllowance || '',
+      planPrice: rawIntake.planPrice || '',
+      serviceStatus: rawIntake.serviceStatus || 'Active',
+      phoneNumber: rawIntake.phoneNumber || '',
     });
     setEditingIntake(true);
   };
 
   const handleSaveInvoice = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setSavingInvoice(true);
     try {
+      const itemsToSave = [...invoiceFormItems.map(it => ({ description: it.description, qty: it.qty, price: it.price }))];
+      if (paymentForm.amount || paymentForm.account || paymentForm.name) {
+        itemsToSave.push({
+          __isPayment: true,
+          name: (paymentForm.name || selectedTicket.client || '').trim(),
+          paymentType: paymentForm.paymentType || 'Card',
+          account: (paymentForm.account || '').trim(),
+          amount: paymentForm.amount || '',
+          date: new Date().toISOString()
+        });
+      }
+
       await updateTicketInfo(selectedTicket.id, {
         invoice_status: invoiceStatus,
-        invoice_items: invoiceFormItems
+        invoice_items: itemsToSave
       });
       loadTickets(); // Refresh
-      alert('Invoice updated securely!');
+      alert('Invoice and payment details updated successfully!');
     } catch (err) {
       alert(err.message || 'Could not save invoice');
     } finally {
@@ -1162,6 +1380,14 @@ export default function TechDashboard() {
                     >
                       <FileCheck size={16} /> Summary
                     </button>
+                    <button
+                      type="button"
+                      className="button secondary small-btn flex items-center gap-2"
+                      onClick={() => generateServiceSummaryPrint(selectedTicket, selectedTicket.raw?.summary || '', events)}
+                      title="Print Branded Service Summary"
+                    >
+                      <Printer size={16} /> Print Summary
+                    </button>
                     <label className="text-muted text-sm" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       Status
                       <select 
@@ -1260,60 +1486,292 @@ export default function TechDashboard() {
                     </div>
                   </div>
 
-                  {/* Row 2: Intake Details (Full Width if editing, else span 2) & ID/Sim */}
-                  <div className={`detail-panel glass-panel ${editingIntake ? 'span-3' : 'span-2'}`}>
-                    <div className="flex justify-between items-center mb-4">
-                      <h4 className="flex items-center gap-2 m-0 text-muted uppercase tracking-widest text-xs font-bold">Comprehensive Intake & Notes</h4>
-                    </div>
-                    {!editingIntake ? (
-                      <div className="grid grid-cols-2 gap-6">
-                        <div className="info-list">
-                          <div className="info-item">
-                            <label>IMEI / Serial</label>
-                            <p className="monospace text-sm">{selectedTicket.intake.imei || 'N/A'}</p>
+                  {/* Row 2: Comprehensive Intake & Device Information (Organized Layout, Span-3) */}
+                  <div className="detail-panel glass-panel span-3">
+                    {(() => {
+                      const parsed = parseIntakeData(selectedTicket);
+
+                      if (editingIntake) {
+                        return (
+                          <form onSubmit={handleSaveIntake} className="animate-fade-in">
+                            <div className="flex justify-between items-center mb-4">
+                              <h4 className="flex items-center gap-2 m-0 text-muted uppercase tracking-widest text-xs font-bold">
+                                <Pencil size={15} /> Edit Intake Information
+                              </h4>
+                              <div className="flex gap-2">
+                                <button type="submit" className="button small-btn" disabled={savingIntake}>{savingIntake ? 'Saving...' : 'Save Changes'}</button>
+                                <button type="button" className="button secondary small-btn" onClick={() => setEditingIntake(false)}>Cancel</button>
+                              </div>
+                            </div>
+                            <div className="form-grid grid-cols-3">
+                              <div className="form-group">
+                                <label className="form-label text-xs">Device Type</label>
+                                <select className="form-input text-sm" value={intakeForm.deviceType} onChange={e=>setIntakeForm({...intakeForm, deviceType: e.target.value})}>
+                                  <option value="">Select...</option>
+                                  <option value="Smartphone">Smartphone</option>
+                                  <option value="Tablet">Tablet</option>
+                                  <option value="Laptop">Laptop</option>
+                                  <option value="Desktop">Desktop</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                              </div>
+                              <div className="form-group"><label className="form-label text-xs">Brand</label><input type="text" className="form-input text-sm" value={intakeForm.brand} onChange={e=>setIntakeForm({...intakeForm, brand: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Model</label><input type="text" className="form-input text-sm" value={intakeForm.model} onChange={e=>setIntakeForm({...intakeForm, model: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Operating System</label><input type="text" className="form-input text-sm" value={intakeForm.os} onChange={e=>setIntakeForm({...intakeForm, os: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Service Provider</label><input type="text" className="form-input text-sm" value={intakeForm.provider} onChange={e=>setIntakeForm({...intakeForm, provider: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Lock Status</label><input type="text" className="form-input text-sm" value={intakeForm.lockStatus} onChange={e=>setIntakeForm({...intakeForm, lockStatus: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">IMEI 1 (Primary)</label><input type="text" className="form-input text-sm monospace" value={intakeForm.imei} onChange={e=>setIntakeForm({...intakeForm, imei: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">IMEI 2 (Secondary)</label><input type="text" className="form-input text-sm monospace" value={intakeForm.imei2} onChange={e=>setIntakeForm({...intakeForm, imei2: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">ICCID 1 (Primary SIM)</label><input type="text" className="form-input text-sm monospace" value={intakeForm.iccid} onChange={e=>setIntakeForm({...intakeForm, iccid: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">ICCID 2 (SIM 2)</label><input type="text" className="form-input text-sm monospace" value={intakeForm.iccid2} onChange={e=>setIntakeForm({...intakeForm, iccid2: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Plan Type</label><input type="text" className="form-input text-sm" value={intakeForm.planType} onChange={e=>setIntakeForm({...intakeForm, planType: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Plan Name</label><input type="text" className="form-input text-sm" value={intakeForm.planName} onChange={e=>setIntakeForm({...intakeForm, planName: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Data Allowance</label><input type="text" className="form-input text-sm" value={intakeForm.dataAllowance} onChange={e=>setIntakeForm({...intakeForm, dataAllowance: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Monthly Cost</label><input type="text" className="form-input text-sm" value={intakeForm.planPrice} onChange={e=>setIntakeForm({...intakeForm, planPrice: e.target.value})} /></div>
+                              <div className="form-group"><label className="form-label text-xs">Line Phone Number</label><input type="text" className="form-input text-sm" value={intakeForm.phoneNumber} onChange={e=>setIntakeForm({...intakeForm, phoneNumber: e.target.value})} /></div>
+                            </div>
+                            <div className="form-group mt-3">
+                              <label className="form-label text-xs">Client Remarks &amp; Notes</label>
+                              <textarea className="form-input text-sm" rows="3" value={intakeForm.notes} onChange={e=>setIntakeForm({...intakeForm, notes: e.target.value})}></textarea>
+                            </div>
+                            <div className="flex gap-2 mt-4 justify-end">
+                              <button type="submit" className="button" disabled={savingIntake}>{savingIntake ? 'Saving...' : 'Save Changes'}</button>
+                              <button type="button" className="button secondary" onClick={() => setEditingIntake(false)}>Cancel</button>
+                            </div>
+                          </form>
+                        );
+                      }
+
+                      return (
+                        <div>
+                          <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <h4 className="flex items-center gap-2 m-0 text-muted uppercase tracking-widest text-xs font-bold">
+                                <ClipboardList size={16} /> Comprehensive Intake &amp; Device Inventory
+                              </h4>
+                              {parsed.eligibleForUnlock !== undefined && (
+                                <span className="status-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(96, 165, 250, 0.3)', fontSize: '0.72rem', padding: '2px 8px' }}>
+                                  Unlock Eligible: {parsed.eligibleForUnlock === true || parsed.eligibleForUnlock === 'yes' ? 'Yes' : parsed.eligibleForUnlock === false || parsed.eligibleForUnlock === 'no' ? 'No' : 'Unsure'}
+                                </span>
+                              )}
+                              {parsed.snapMedicaid && (
+                                <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', fontSize: '0.72rem', padding: '2px 8px' }}>
+                                  SNAP/Medicaid: {parsed.snapMedicaid}
+                                </span>
+                              )}
+                              {parsed.hardshipFinancing && (
+                                <span className="status-badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: '1px solid rgba(251, 191, 36, 0.3)', fontSize: '0.72rem', padding: '2px 8px' }}>
+                                  Hardship Assistance Requested
+                                </span>
+                              )}
+                            </div>
+                            <button type="button" onClick={startEditIntake} className="button secondary small-btn flex items-center gap-1.5 text-xs">
+                              <Pencil size={13} /> Edit Intake
+                            </button>
                           </div>
-                          <div className="info-item">
-                            <label>ICCID / SIM</label>
-                            <p className="monospace text-sm">{selectedTicket.intake.iccid || 'N/A'}</p>
+
+                          {/* Device Lines */}
+                          {parsed.lines.map((line, idx) => (
+                            <div key={line.id || idx} className="intake-device-card">
+                              <div className="intake-card-header">
+                                <span className="font-bold text-sm text-primary flex items-center gap-2">
+                                  <Smartphone size={16} />
+                                  {idx === 0 ? 'Primary Device / Line' : `Device / Line #${idx + 1}`}: {line.brand} {line.model || ''} ({line.type || 'Smartphone'})
+                                </span>
+                                {line.lockStatus && (
+                                  <span className="status-badge" style={{ fontSize: '0.72rem', padding: '2px 8px' }}>
+                                    Lock: {line.lockStatus}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-6">
+                                {/* Subgroup 1: Identifiers */}
+                                <div className="intake-subgroup">
+                                  <div className="intake-group-title">Hardware Identifiers</div>
+                                  <div className="info-list">
+                                    <div className="info-item">
+                                      <label>IMEI 1 (Primary)</label>
+                                      <div className="identifier-pill">
+                                        <span>{line.imei || '—'}</span>
+                                        {line.imei && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyText(line.imei, `imei1-${idx}`)}
+                                            className="copy-mini-btn"
+                                            title="Copy IMEI 1"
+                                          >
+                                            {copiedFieldId === `imei1-${idx}` ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                                            {copiedFieldId === `imei1-${idx}` ? 'Copied' : 'Copy'}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>IMEI 2 (Secondary / eSIM)</label>
+                                      <div className="identifier-pill">
+                                        <span>{line.imei2 || '—'}</span>
+                                        {line.imei2 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyText(line.imei2, `imei2-${idx}`)}
+                                            className="copy-mini-btn"
+                                            title="Copy IMEI 2"
+                                          >
+                                            {copiedFieldId === `imei2-${idx}` ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                                            {copiedFieldId === `imei2-${idx}` ? 'Copied' : 'Copy'}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>ICCID 1 (SIM Number)</label>
+                                      <div className="identifier-pill">
+                                        <span>{line.iccid || '—'}</span>
+                                        {line.iccid && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyText(line.iccid, `iccid1-${idx}`)}
+                                            className="copy-mini-btn"
+                                            title="Copy ICCID 1"
+                                          >
+                                            {copiedFieldId === `iccid1-${idx}` ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                                            {copiedFieldId === `iccid1-${idx}` ? 'Copied' : 'Copy'}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>ICCID 2 (SIM 2)</label>
+                                      <div className="identifier-pill">
+                                        <span>{line.iccid2 || '—'}</span>
+                                        {line.iccid2 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyText(line.iccid2, `iccid2-${idx}`)}
+                                            className="copy-mini-btn"
+                                            title="Copy ICCID 2"
+                                          >
+                                            {copiedFieldId === `iccid2-${idx}` ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                                            {copiedFieldId === `iccid2-${idx}` ? 'Copied' : 'Copy'}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Subgroup 2: Device Specs */}
+                                <div className="intake-subgroup">
+                                  <div className="intake-group-title">Device Specifications</div>
+                                  <div className="info-list">
+                                    <div className="info-item">
+                                      <label>Brand &amp; Model</label>
+                                      <p>{line.brand} {line.model || '—'}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>Operating System</label>
+                                      <p>{line.os || '—'}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>SIM Format</label>
+                                      <p>{line.simType || 'Physical / Digital'}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>Amount Owed / Upgrade</label>
+                                      <p>{line.amountOwed || '$0'} {line.upgradeEligible && `(Upgrade: ${line.upgradeEligible})`}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>Managed Status</label>
+                                      <p>{line.managed || 'Personal'}</p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Subgroup 3: Service Plan */}
+                                <div className="intake-subgroup">
+                                  <div className="intake-group-title">Service &amp; Plan Details</div>
+                                  <div className="info-list">
+                                    <div className="info-item">
+                                      <label>Carrier / Provider</label>
+                                      <p className="font-semibold text-emerald-400">{line.provider || '—'}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>Plan Type &amp; Name</label>
+                                      <p>{line.planType || '—'} {line.planName && `(${line.planName})`}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>Data Allowance &amp; Cost</label>
+                                      <p>{line.dataAllowance || '—'} {line.planPrice && `• ${line.planPrice}`}</p>
+                                    </div>
+                                    <div className="info-item">
+                                      <label>Line Status &amp; Phone Number</label>
+                                      <p>{line.serviceStatus || '—'} {line.phoneNumber && `• ${line.phoneNumber}`}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Redemption / SIM kit conditional card if present */}
+                              {(line.hasServicePin || line.hasSimKit) && (
+                                <div className="redemption-highlight-box mt-3">
+                                  <div className="flex justify-between items-center mb-2">
+                                    <span className="font-semibold text-xs text-primary uppercase tracking-wider">Redemption &amp; SIM Kit Information</span>
+                                    {line.hasSimKit && (
+                                      <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '2px 8px', fontSize: '0.72rem', fontWeight: 600 }}>
+                                        ✓ Client has SIM card kit on hand
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="grid grid-cols-4 gap-4 text-xs">
+                                    <div>
+                                      <span className="text-muted block">Provider:</span>
+                                      <span className="font-medium text-gray-200">{line.servicePinProvider || line.provider || '—'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted block">Service PIN:</span>
+                                      <span className="font-mono font-medium text-amber-400">{line.servicePin || '—'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted block">Plan / Denomination:</span>
+                                      <span className="font-medium text-gray-200">{line.servicePinPlan || '—'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-muted block">Purchase Price:</span>
+                                      <span className="font-medium text-gray-200">{line.servicePinPrice || '—'}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+
+                          {/* Porting Details Card if present */}
+                          {parsed.portingDetails && (
+                            <div className="intake-device-card" style={{ borderColor: 'rgba(59, 130, 246, 0.3)', background: 'rgba(59, 130, 246, 0.05)' }}>
+                              <div className="intake-group-title" style={{ color: '#60a5fa' }}>Number Porting Information</div>
+                              <div className="text-xs leading-relaxed text-gray-300 font-mono whitespace-pre-wrap">{parsed.portingDetails}</div>
+                            </div>
+                          )}
+
+                          {/* Audit Details Card if present */}
+                          {parsed.auditDetails && (
+                            <div className="intake-device-card" style={{ borderColor: 'rgba(168, 85, 247, 0.3)', background: 'rgba(168, 85, 247, 0.05)' }}>
+                              <div className="intake-group-title" style={{ color: '#c084fc' }}>Cost-Saving Audit Questionnaire</div>
+                              <div className="text-xs leading-relaxed text-gray-300 font-mono whitespace-pre-wrap">{parsed.auditDetails}</div>
+                            </div>
+                          )}
+
+                          {/* Client Request Remarks */}
+                          <div className="mt-3">
+                            <div className="intake-group-title">Client Remarks &amp; Request Notes</div>
+                            <div className="intake-notes-card">
+                              {parsed.cleanNotes || 'No additional remarks provided.'}
+                            </div>
                           </div>
                         </div>
-                        <div className="info-item">
-                          <label>Client Request Notes</label>
-                          <div className="notes-box text-sm" style={{ maxHeight: '150px', overflowY: 'auto' }}>
-                            {selectedTicket.intake.notes || 'No specific notes provided.'}
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <form onSubmit={handleSaveIntake} className="animate-fade-in">
-                        <div className="intake-grid">
-                          <div className="form-group">
-                            <label className="form-label">Device Type</label>
-                            <select className="form-input text-sm" value={intakeForm.deviceType} onChange={e=>setIntakeForm({...intakeForm, deviceType: e.target.value})}>
-                              <option value="">Select...</option>
-                              <option value="Smartphone">Smartphone</option>
-                              <option value="Tablet">Tablet</option>
-                              <option value="Laptop">Laptop</option>
-                              <option value="Desktop">Desktop</option>
-                              <option value="Other">Other</option>
-                            </select>
-                          </div>
-                          <div className="form-group"><label className="form-label">Brand & Model</label><input type="text" className="form-input text-sm" value={intakeForm.brand} onChange={e=>setIntakeForm({...intakeForm, brand: e.target.value})} /></div>
-                          <div className="form-group"><label className="form-label">Operating System</label><input type="text" className="form-input text-sm" value={intakeForm.os} onChange={e=>setIntakeForm({...intakeForm, os: e.target.value})} /></div>
-                          <div className="form-group"><label className="form-label">Service Provider</label><input type="text" className="form-input text-sm" value={intakeForm.provider} onChange={e=>setIntakeForm({...intakeForm, provider: e.target.value})} /></div>
-                          <div className="form-group"><label className="form-label">IMEI</label><input type="text" className="form-input text-sm" value={intakeForm.imei} onChange={e=>setIntakeForm({...intakeForm, imei: e.target.value})} /></div>
-                          <div className="form-group"><label className="form-label">ICCID</label><input type="text" className="form-input text-sm" value={intakeForm.iccid} onChange={e=>setIntakeForm({...intakeForm, iccid: e.target.value})} /></div>
-                        </div>
-                        <div className="form-group mt-3">
-                          <label className="form-label">Client Notes</label>
-                          <textarea className="form-input text-sm" rows="3" value={intakeForm.notes} onChange={e=>setIntakeForm({...intakeForm, notes: e.target.value})}></textarea>
-                        </div>
-                        <div className="flex gap-2 mt-4 justify-end">
-                          <button type="submit" className="button" disabled={savingIntake}>{savingIntake ? 'Saving...' : 'Save Changes'}</button>
-                          <button type="button" className="button secondary" onClick={() => setEditingIntake(false)}>Cancel</button>
-                        </div>
-                      </form>
-                    )}
+                      );
+                    })()}
                   </div>
 
                   {/* Credentials (Tabular, Editable & Addable) */}
@@ -1930,6 +2388,93 @@ export default function TechDashboard() {
                           </tr>
                         </tfoot>
                       </table>
+                    </div>
+
+                    {/* Payment & Settlement Section */}
+                    <div className="payment-config-panel">
+                      <div className="flex justify-between items-center mb-3">
+                        <h4 className="text-sm font-bold text-emerald-400 flex items-center gap-2 m-0">
+                          <CreditCard size={15} /> Payment &amp; Settlement Record
+                        </h4>
+                        <button
+                          type="button"
+                          className="button secondary small-btn text-xs"
+                          onClick={() => {
+                            const subtotal = calculateInvoiceSubtotal();
+                            setPaymentForm(prev => ({
+                              ...prev,
+                              name: prev.name || selectedTicket.client || '',
+                              amount: subtotal > 0 ? subtotal.toFixed(2) : prev.amount
+                            }));
+                          }}
+                          title="Auto-fill payer name and remaining balance"
+                        >
+                          Auto-fill Full Amount (${calculateInvoiceSubtotal().toFixed(2)})
+                        </button>
+                      </div>
+                      <p className="text-muted text-xs mb-3">
+                        Record payment details to display receipt status, transaction reference, and paid balances on the client invoice.
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <div className="form-group mb-0">
+                          <label className="form-label text-xs">Payer Name</label>
+                          <input
+                            type="text"
+                            className="form-input text-xs"
+                            placeholder={selectedTicket.client || "Name on account/card"}
+                            value={paymentForm.name}
+                            onChange={e => setPaymentForm({ ...paymentForm, name: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group mb-0">
+                          <label className="form-label text-xs">Payment Type</label>
+                          <select
+                            className="form-input text-xs"
+                            value={paymentForm.paymentType}
+                            onChange={e => setPaymentForm({ ...paymentForm, paymentType: e.target.value })}
+                          >
+                            <option value="Cash">Cash</option>
+                            <option value="Card">Card</option>
+                            <option value="PayPal">PayPal</option>
+                            <option value="Venmo">Venmo</option>
+                            <option value="CashApp">CashApp</option>
+                            <option value="Negotiated/Other">Negotiated/Other</option>
+                          </select>
+                        </div>
+                        <div className="form-group mb-0">
+                          <label className="form-label text-xs">Card / Account / Ref #</label>
+                          <input
+                            type="text"
+                            className="form-input text-xs monospace"
+                            placeholder="e.g. *4821, @cashtag, or TxID"
+                            value={paymentForm.account}
+                            onChange={e => setPaymentForm({ ...paymentForm, account: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group mb-0">
+                          <label className="form-label text-xs">Amount Paid ($)</label>
+                          <div className="flex gap-1">
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="form-input text-xs flex-1"
+                              placeholder="0.00"
+                              value={paymentForm.amount}
+                              onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                            />
+                            {paymentForm.amount && (
+                              <button
+                                type="button"
+                                className="icon-button text-xs text-muted hover:text-red-400"
+                                onClick={() => setPaymentForm({ ...paymentForm, amount: '', account: '' })}
+                                title="Clear Payment"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
