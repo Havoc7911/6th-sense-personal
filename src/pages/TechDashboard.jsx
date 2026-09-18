@@ -315,6 +315,10 @@ const STATUS_OPTIONS = ['Pending', 'Needs Authorization', 'Authorized', 'In Prog
 const PRIORITY_OPTIONS = ['Low', 'Normal', 'High', 'Urgent'];
 const EVENT_TYPES = [
   'Note',
+  'Outcome',
+  'Recommendations',
+  'Credentials',
+  'Account',
   'App',
   'Content',
   'Editing',
@@ -326,7 +330,6 @@ const EVENT_TYPES = [
   'SIM/eSIM',
   'Backup/Restore',
   'Configuration',
-  'Credentials',
   'Update',
   'Research/Planning',
   'Consult',
@@ -345,25 +348,55 @@ const EVENT_STATUSES = ['Successful', 'Unsuccessful', 'Pending', 'Delayed', 'Com
 // ─── Summary Modal ─────────────────────────────────────────────────────────────────────────────
 
 function buildSummaryFromEvents(ticket, events) {
-  const resolutionEvents = events.filter(e => e.event_type === 'Resolution');
-  const issueEvents = events.filter(e => e.event_type === 'Issue Found');
-  const allOtherEvents = events.filter(e => e.event_type !== 'Resolution' && e.event_type !== 'Issue Found');
+  const cleanNote = (n) => String(n || '')
+    .replace(/\[Summary\]\s*/g, '')
+    .replace(/\[(Successful|Unsuccessful|Pending|Delayed|Completed)\]\s*/g, '')
+    .trim();
 
-  const workLines = allOtherEvents.length
-    ? allOtherEvents.map(e => `  • ${e.note}`).join('\n')
+  // Outcome events
+  const outcomeEvents = events.filter(e => e.event_type === 'Outcome' || e.event_type === 'Resolution');
+  // Recommendation events
+  const recommendationEvents = events.filter(e => e.event_type === 'Recommendations');
+  // Issue events
+  const issueEvents = events.filter(e => e.event_type === 'Issue Found');
+  
+  // Work log events: Filter those with [Summary] tag, or if none tagged with [Summary], all non-outcome/recommendation/issue
+  const summaryWorkEvents = events.filter(e => 
+    e.event_type !== 'Outcome' && 
+    e.event_type !== 'Resolution' && 
+    e.event_type !== 'Recommendations' && 
+    e.event_type !== 'Issue Found' &&
+    e.note.includes('[Summary]')
+  );
+
+  const displayWorkEvents = summaryWorkEvents.length > 0 
+    ? summaryWorkEvents 
+    : events.filter(e => 
+        e.event_type !== 'Outcome' && 
+        e.event_type !== 'Resolution' && 
+        e.event_type !== 'Recommendations' && 
+        e.event_type !== 'Issue Found'
+      );
+
+  const workLines = displayWorkEvents.length
+    ? displayWorkEvents.map(e => `  • [${e.event_type}] ${cleanNote(e.note)}`).join('\n')
     : '  [No work events logged yet]';
 
-  const outcomeLines = resolutionEvents.length
-    ? resolutionEvents.map(e => `  • ${e.note}`).join('\n')
-    : '  [No resolution logged yet]';
+  const outcomeLines = outcomeEvents.length
+    ? outcomeEvents.map(e => `  • ${cleanNote(e.note)}`).join('\n')
+    : '  [Service completed successfully]';
+
+  const recLines = recommendationEvents.length
+    ? recommendationEvents.map(e => `  • ${cleanNote(e.note)}`).join('\n')
+    : '  [None at this time]';
 
   const issueLines = issueEvents.length
-    ? `\nIssues Found:\n${issueEvents.map(e => `  • ${e.note}`).join('\n')}` 
+    ? `\nIssues Addressed:\n${issueEvents.map(e => `  • ${cleanNote(e.note)}`).join('\n')}` 
     : '';
 
   return `Service Summary for ${ticket.client}
 Service: ${ticket.service}
-Device: ${ticket.intake.brand || ''} ${ticket.intake.deviceType || ''}
+Device: ${ticket.intake?.brand || ''} ${ticket.intake?.deviceType || ''}
 
 Service Log:
 ${workLines}
@@ -371,8 +404,8 @@ ${workLines}
 Outcome:
 ${outcomeLines}${issueLines}
 
-Notes:
-[Any follow-up recommendations]`;
+Follow-Up Recommendations:
+${recLines}`;
 }
 
 function SummaryModal({ ticket, events, onClose, onSave }) {
@@ -444,14 +477,43 @@ export default function TechDashboard() {
   // Event log
   const [events, setEvents] = useState([]);
   const [eventType, setEventType] = useState('Note');
-  const [eventStatus, setEventStatus] = useState('Completed');
+  const [eventStatus, setEventStatus] = useState('Successful');
   const [eventNote, setEventNote] = useState('');
+  const [eventIncludeInSummary, setEventIncludeInSummary] = useState(true);
+
+  // Specialized event fields for Credentials & Account
+  const [eventUserId, setEventUserId] = useState('');
+  const [eventPassword, setEventPassword] = useState('');
+  const [eventCredNotes, setEventCredNotes] = useState('');
+  const [accountApp, setAccountApp] = useState('');
+  const [accountUserId, setAccountUserId] = useState('');
+  const [accountPassword, setAccountPassword] = useState('');
+  const [accountStatus, setAccountStatus] = useState('New');
+  const [accountNotes, setAccountNotes] = useState('');
+
   const [addingEvent, setAddingEvent] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(true);
   const [editingEventId, setEditingEventId] = useState(null);
   const [editEventNote, setEditEventNote] = useState('');
   const [editEventType, setEditEventType] = useState('');
+  const [editEventStatus, setEditEventStatus] = useState('Successful');
+  const [editIncludeInSummary, setEditIncludeInSummary] = useState(true);
   const [eventUpdating, setEventUpdating] = useState(false);
+
+  // Credentials management in Tech Portal
+  const [editingCreds, setEditingCreds] = useState(false);
+  const [credForm, setCredForm] = useState([]);
+  const [showAddCredModal, setShowAddCredModal] = useState(false);
+  const [newCredItem, setNewCredItem] = useState({
+    type: 'Device Account',
+    accountName: '',
+    username: '',
+    password: '',
+    notes: '',
+    requires2FA: false,
+    targetDevice: 'all'
+  });
+  const [savingCreds, setSavingCreds] = useState(false);
 
   // Files
   const [files, setFiles] = useState([]);
@@ -611,14 +673,82 @@ export default function TechDashboard() {
 
   const handleAddEvent = async (e) => {
     e.preventDefault();
-    if (!eventNote.trim() || !selectedTicket) return;
+    if (!selectedTicket) return;
+
+    let computedNote = '';
+    let newCredToSync = null;
+
+    if (eventType === 'Credentials') {
+      if (!eventUserId.trim() && !eventPassword.trim()) {
+        alert('Please enter a User ID or Password for the credentials entry.');
+        return;
+      }
+      computedNote = `User ID: ${eventUserId.trim()} | Password: ${eventPassword.trim()}${eventCredNotes.trim() ? ` | Notes: ${eventCredNotes.trim()}` : ''}`;
+      newCredToSync = {
+        type: 'Credentials',
+        username: eventUserId.trim(),
+        password: eventPassword.trim(),
+        notes: eventCredNotes.trim(),
+        requires2FA: false,
+      };
+    } else if (eventType === 'Account') {
+      if (!accountApp.trim() && !accountUserId.trim()) {
+        alert('Please provide the App/Site or User ID for the account entry.');
+        return;
+      }
+      computedNote = `[${accountStatus}] App/Site: ${accountApp.trim()} | User ID: ${accountUserId.trim()} | Password: ${accountPassword.trim()}${accountNotes.trim() ? ` | Notes: ${accountNotes.trim()}` : ''}`;
+      newCredToSync = {
+        type: `${accountApp.trim() || 'Account'} (${accountStatus})`,
+        username: accountUserId.trim(),
+        password: accountPassword.trim(),
+        notes: accountNotes.trim(),
+        requires2FA: false,
+      };
+    } else {
+      if (!eventNote.trim()) return;
+      computedNote = eventNote.trim();
+    }
+
     setAddingEvent(true);
     try {
+      const summaryPrefix = eventIncludeInSummary ? '[Summary] ' : '';
       const statusPrefix = eventStatus !== 'None' ? `[${eventStatus}] ` : '';
-      const finalNote = `${statusPrefix}${eventNote.trim()}`;
-      const row = await insertTicketEvent(selectedTicket.id, eventType, finalNote);
+      const finalNote = `${summaryPrefix}${statusPrefix}${computedNote}`;
+
+      await insertTicketEvent(selectedTicket.id, eventType, finalNote);
+
+      // Auto-sync to ticket credentials if Credential or Account was added
+      if (newCredToSync) {
+        const currentCreds = Array.isArray(selectedTicket.intake?.credentials) 
+          ? [...selectedTicket.intake.credentials] 
+          : [];
+        const updatedCreds = [...currentCreds, newCredToSync];
+        await updateTicketInfo(selectedTicket.id, { credentials: updatedCreds });
+        
+        // Update local state
+        setSelectedTicket(t => t ? {
+          ...t,
+          intake: { ...t.intake, credentials: updatedCreds }
+        } : t);
+        setTickets(list => list.map(t => t.id === selectedTicket.id ? {
+          ...t,
+          intake: { ...t.intake, credentials: updatedCreds }
+        } : t));
+      }
+
+      // Reset form fields
       setEventNote('');
+      setEventUserId('');
+      setEventPassword('');
+      setEventCredNotes('');
+      setAccountApp('');
+      setAccountUserId('');
+      setAccountPassword('');
+      setAccountNotes('');
+      setAccountStatus('New');
       setEventStatus('Successful');
+      setEventIncludeInSummary(true);
+
       fetchTicketEvents(selectedTicket.id).then(setEvents);
     } catch (e) {
       alert(e.message || 'Failed to add event');
@@ -627,11 +757,38 @@ export default function TechDashboard() {
     }
   };
 
+  const startEditEvent = (ev) => {
+    setEditingEventId(ev.id);
+    setEditEventType(ev.event_type);
+    
+    const hasSummary = ev.note.includes('[Summary]');
+    setEditIncludeInSummary(hasSummary);
+
+    // Extract status if present
+    const statusMatch = ev.note.match(/\[(Successful|Unsuccessful|Pending|Delayed|Completed)\]/);
+    setEditEventStatus(statusMatch ? statusMatch[1] : 'None');
+
+    // Clean note
+    const clean = ev.note
+      .replace(/\[Summary\]\s*/g, '')
+      .replace(/\[(Successful|Unsuccessful|Pending|Delayed|Completed)\]\s*/g, '');
+    setEditEventNote(clean);
+  };
+
   const handleEditEventSave = async (id) => {
     if (!editEventNote.trim()) return;
     setEventUpdating(true);
     try {
-      await updateTicketEvent(id, { note: editEventNote.trim(), event_type: editEventType });
+      const summaryPrefix = editIncludeInSummary ? '[Summary] ' : '';
+      const statusPrefix = editEventStatus && editEventStatus !== 'None' ? `[${editEventStatus}] ` : '';
+      
+      let cleanNote = editEventNote.trim()
+        .replace(/^\[Summary\]\s*/, '')
+        .replace(/^\[(Successful|Unsuccessful|Pending|Delayed|Completed|None)\]\s*/, '');
+
+      const finalNote = `${summaryPrefix}${statusPrefix}${cleanNote}`;
+
+      await updateTicketEvent(id, { note: finalNote, event_type: editEventType });
       setEditingEventId(null);
       fetchTicketEvents(selectedTicket.id).then(setEvents);
     } catch (e) {
@@ -648,6 +805,109 @@ export default function TechDashboard() {
       fetchTicketEvents(selectedTicket.id).then(setEvents);
     } catch (e) {
       alert(e.message || 'Failed to delete event');
+    }
+  };
+
+  // ─── File Upload Handler ───
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedTicket) return;
+    setUploading(true);
+    try {
+      await uploadTicketFile(selectedTicket.id, file);
+      const updatedFiles = await fetchTicketFiles(selectedTicket.id);
+      setFiles(updatedFiles);
+      alert(`File "${file.name}" uploaded successfully.`);
+    } catch (err) {
+      alert(err.message || 'Failed to upload file');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // ─── Credentials Management Handlers ───
+  const startEditCreds = () => {
+    const current = Array.isArray(selectedTicket?.intake?.credentials) 
+      ? JSON.parse(JSON.stringify(selectedTicket.intake.credentials)) 
+      : [];
+    setCredForm(current);
+    setEditingCreds(true);
+  };
+
+  const updateCredFormField = (index, field, val) => {
+    const next = [...credForm];
+    next[index] = { ...next[index], [field]: val };
+    setCredForm(next);
+  };
+
+  const deleteCredFormRow = (index) => {
+    setCredForm(credForm.filter((_, i) => i !== index));
+  };
+
+  const addCredFormRow = () => {
+    setCredForm([...credForm, { type: 'Device Account', username: '', password: '', notes: '', requires2FA: false }]);
+  };
+
+  const handleSaveCreds = async () => {
+    if (!selectedTicket) return;
+    setSavingCreds(true);
+    try {
+      await updateTicketInfo(selectedTicket.id, { credentials: credForm });
+      setSelectedTicket(t => t ? {
+        ...t,
+        intake: { ...t.intake, credentials: credForm }
+      } : t);
+      setTickets(list => list.map(t => t.id === selectedTicket.id ? {
+        ...t,
+        intake: { ...t.intake, credentials: credForm }
+      } : t));
+      setEditingCreds(false);
+      alert('Credentials updated successfully!');
+    } catch (err) {
+      alert(err.message || 'Failed to save credentials');
+    } finally {
+      setSavingCreds(false);
+    }
+  };
+
+  const handleAddNewCred = async (e) => {
+    e.preventDefault();
+    if (!newCredItem.type || (!newCredItem.username && !newCredItem.password && !newCredItem.accountName)) {
+      alert('Please fill in credential details.');
+      return;
+    }
+    const current = Array.isArray(selectedTicket?.intake?.credentials) 
+      ? [...selectedTicket.intake.credentials] 
+      : [];
+    const updated = [...current, { ...newCredItem, id: Date.now() }];
+    
+    setSavingCreds(true);
+    try {
+      await updateTicketInfo(selectedTicket.id, { credentials: updated });
+      setSelectedTicket(t => t ? {
+        ...t,
+        intake: { ...t.intake, credentials: updated }
+      } : t);
+      setTickets(list => list.map(t => t.id === selectedTicket.id ? {
+        ...t,
+        intake: { ...t.intake, credentials: updated }
+      } : t));
+      setNewCredItem({
+        type: 'Device Account',
+        accountName: '',
+        username: '',
+        password: '',
+        notes: '',
+        requires2FA: false,
+        targetDevice: 'all'
+      });
+      setShowAddCredModal(false);
+      alert('New credential added to ticket!');
+    } catch (err) {
+      alert(err.message || 'Failed to add credential');
+    } finally {
+      setSavingCreds(false);
     }
   };
 
@@ -747,17 +1007,6 @@ export default function TechDashboard() {
     }
 
     return Math.max(0, subtotal);
-  };
-
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedTicket) return;
-    setUploading(true);
-    try {
-      const row = await uploadTicketFile(selectedTicket.id, file);
-      setFiles(prev => [row, ...prev]);
-    } catch (err) { alert(err.message || 'Upload failed'); }
-    finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
   };
 
   const handleSaveSummary = async (text) => {
@@ -1067,37 +1316,226 @@ export default function TechDashboard() {
                     )}
                   </div>
 
-                  {/* Credentials (Tabular) */}
+                  {/* Credentials (Tabular, Editable & Addable) */}
                   <div className="detail-panel glass-panel">
-                    <h3 className="text-amber-400"><Shield size={18} className="panel-icon" /> Credentials</h3>
-                    <div className="mt-4 overflow-x-auto">
-                      <table className="creds-table w-full text-xs">
-                        <thead>
-                          <tr>
-                            <th>Account</th>
-                            <th>Value</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedTicket.intake.credentials.length === 0 ? (
-                            <tr><td colSpan={2} className="text-muted py-2">None provided</td></tr>
-                          ) : (
-                            selectedTicket.intake.credentials.map((cred, idx) => (
-                              <tr key={idx}>
-                                <td className="font-bold">{cred.type}</td>
-                                <td className="monospace sensitive">
-                                  {cred.username && <div>{cred.username}</div>}
-                                  {cred.password && <div>{cred.password}</div>}
-                                </td>
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-amber-400 m-0"><Shield size={18} className="panel-icon" /> Credentials</h3>
+                      <div className="flex gap-2">
+                        {!editingCreds ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setShowAddCredModal(v => !v)}
+                              className="button secondary small-btn"
+                              title="Add credential to ticket"
+                            >
+                              <Plus size={12} /> Add
+                            </button>
+                            <button
+                              type="button"
+                              onClick={startEditCreds}
+                              className="button secondary small-btn"
+                              title="Edit credentials"
+                            >
+                              <Pencil size={12} /> Edit
+                            </button>
+                          </>
+                        ) : (
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveCreds}
+                              disabled={savingCreds}
+                              className="button small-btn"
+                            >
+                              {savingCreds ? 'Saving...' : 'Save'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingCreds(false)}
+                              className="button secondary small-btn"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick Add Credential Card */}
+                    {showAddCredModal && (
+                      <form onSubmit={handleAddNewCred} className="mb-4 p-3 glass-panel animate-fade-in" style={{ background: 'rgba(255,107,0,0.06)', border: '1px solid rgba(255,107,0,0.25)', borderRadius: '6px' }}>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-bold text-primary">Add New Credential</span>
+                          <button type="button" onClick={() => setShowAddCredModal(false)} className="text-muted hover:text-white"><X size={14}/></button>
+                        </div>
+                        <div className="form-grid grid-cols-2 gap-2 mb-2">
+                          <div>
+                            <label className="form-label text-xs">Type / Account</label>
+                            <input
+                              type="text"
+                              className="form-input text-xs"
+                              placeholder="e.g. Google, Screen PIN, iCloud"
+                              value={newCredItem.type}
+                              onChange={e => setNewCredItem({ ...newCredItem, type: e.target.value })}
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="form-label text-xs">Username / Email / App</label>
+                            <input
+                              type="text"
+                              className="form-input text-xs"
+                              placeholder="e.g. user@gmail.com"
+                              value={newCredItem.username}
+                              onChange={e => setNewCredItem({ ...newCredItem, username: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="form-label text-xs">Password / PIN</label>
+                            <input
+                              type="text"
+                              className="form-input text-xs monospace"
+                              placeholder="Password or PIN"
+                              value={newCredItem.password}
+                              onChange={e => setNewCredItem({ ...newCredItem, password: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="form-label text-xs">Notes (optional)</label>
+                            <input
+                              type="text"
+                              className="form-input text-xs"
+                              placeholder="e.g. Recovery email, hints"
+                              value={newCredItem.notes}
+                              onChange={e => setNewCredItem({ ...newCredItem, notes: e.target.value })}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <label className="checkbox-label text-xs flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={newCredItem.requires2FA}
+                              onChange={e => setNewCredItem({ ...newCredItem, requires2FA: e.target.checked })}
+                            />
+                            <span>Requires 2FA</span>
+                          </label>
+                          <button type="submit" disabled={savingCreds} className="button small-btn">
+                            Add Credential
+                          </button>
+                        </div>
+                      </form>
+                    )}
+
+                    <div className="mt-2 overflow-x-auto">
+                      {!editingCreds ? (
+                        <table className="creds-table w-full text-xs">
+                          <thead>
+                            <tr>
+                              <th>Account / Type</th>
+                              <th>Credentials &amp; Notes</th>
+                              <th style={{ width: '40px' }}>2FA</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(!selectedTicket.intake?.credentials || selectedTicket.intake.credentials.length === 0) ? (
+                              <tr><td colSpan={3} className="text-muted py-3 text-center">No credentials saved for this ticket.</td></tr>
+                            ) : (
+                              selectedTicket.intake.credentials.map((cred, idx) => (
+                                <tr key={idx}>
+                                  <td>
+                                    <span className="font-bold text-gray-200">{cred.type || cred.accountName || 'Credential'}</span>
+                                    {cred.targetDevice && cred.targetDevice !== 'all' && (
+                                      <div className="text-muted text-xs" style={{ fontSize: '0.7rem' }}>{cred.targetDevice}</div>
+                                    )}
+                                  </td>
+                                  <td className="monospace sensitive">
+                                    {cred.username && <div><span className="text-muted">User:</span> {cred.username}</div>}
+                                    {cred.password && <div><span className="text-muted">Pass:</span> {cred.password}</div>}
+                                    {cred.notes && <div className="text-muted text-xs" style={{ fontSize: '0.7rem', fontFamily: 'sans-serif' }}>Note: {cred.notes}</div>}
+                                  </td>
+                                  <td>
+                                    {cred.requires2FA ? (
+                                      <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', fontSize: '0.65rem', padding: '1px 5px', borderRadius: '4px' }}>2FA</span>
+                                    ) : (
+                                      <span className="text-muted text-xs">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div>
+                          <table className="creds-table w-full text-xs mb-2">
+                            <thead>
+                              <tr>
+                                <th>Type</th>
+                                <th>Username / ID</th>
+                                <th>Password / PIN</th>
+                                <th>Notes</th>
+                                <th style={{ width: '30px' }}></th>
                               </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
+                            </thead>
+                            <tbody>
+                              {credForm.map((c, i) => (
+                                <tr key={i}>
+                                  <td>
+                                    <input
+                                      type="text"
+                                      className="form-input text-xs w-full"
+                                      value={c.type || ''}
+                                      onChange={e => updateCredFormField(i, 'type', e.target.value)}
+                                      placeholder="Type"
+                                    />
+                                  </td>
+                                  <td>
+                                    <input
+                                      type="text"
+                                      className="form-input text-xs w-full"
+                                      value={c.username || ''}
+                                      onChange={e => updateCredFormField(i, 'username', e.target.value)}
+                                      placeholder="Username"
+                                    />
+                                  </td>
+                                  <td>
+                                    <input
+                                      type="text"
+                                      className="form-input text-xs w-full monospace"
+                                      value={c.password || ''}
+                                      onChange={e => updateCredFormField(i, 'password', e.target.value)}
+                                      placeholder="Password"
+                                    />
+                                  </td>
+                                  <td>
+                                    <input
+                                      type="text"
+                                      className="form-input text-xs w-full"
+                                      value={c.notes || ''}
+                                      onChange={e => updateCredFormField(i, 'notes', e.target.value)}
+                                      placeholder="Notes"
+                                    />
+                                  </td>
+                                  <td className="text-center">
+                                    <button type="button" onClick={() => deleteCredFormRow(i)} className="text-red-400 hover:text-red-300">
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <button type="button" onClick={addCredFormRow} className="text-emerald-400 hover:text-emerald-300 text-xs font-semibold">
+                            + Add Credential Row
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Row 3: Service Log & Invoice Config Side-by-side */}
+                  {/* Row 3: Service Progress Log */}
                   <div className="detail-panel glass-panel span-2">
                     <div
                       className="flex justify-between items-center mb-4"
@@ -1112,9 +1550,9 @@ export default function TechDashboard() {
                          <table className="quotes-table w-full text-xs">
                            <thead>
                              <tr>
-                               <th style={{width: '120px'}}>Type</th>
+                               <th style={{width: '130px'}}>Type</th>
                                <th>Note / Entry</th>
-                               <th style={{width: '150px'}}>Timestamp</th>
+                               <th style={{width: '140px'}}>Timestamp</th>
                                <th style={{width: '80px'}}>Actions</th>
                              </tr>
                            </thead>
@@ -1122,45 +1560,270 @@ export default function TechDashboard() {
                              {events.length === 0 ? (
                                <tr><td colSpan={4} className="text-muted text-center py-4">No progress entries yet.</td></tr>
                              ) : (
-                               events.map(ev => (
-                                 <tr key={ev.id}>
-                                   <td><span className="event-type-badge">{ev.event_type}</span></td>
-                                   <td>{ev.note}</td>
-                                   <td className="text-muted">{new Date(ev.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</td>
-                                   <td>
-                                     <div className="flex gap-1">
-                                       <button onClick={() => { setEditingEventId(ev.id); setEditEventType(ev.event_type); setEditEventNote(ev.note); }} className="icon-button"><Pencil size={14}/></button>
-                                       <button onClick={() => handleDeleteEvent(ev.id)} className="icon-button text-error"><Trash2 size={14}/></button>
-                                     </div>
-                                   </td>
-                                 </tr>
-                               ))
+                               events.map(ev => {
+                                 const isEditing = editingEventId === ev.id;
+                                 const isSummary = ev.note && ev.note.includes('[Summary]');
+                                 const cleanDisplayNote = ev.note ? ev.note.replace(/\[Summary\]\s*/g, '') : '';
+
+                                 if (isEditing) {
+                                   return (
+                                     <tr key={ev.id} style={{ background: 'rgba(255,255,255,0.04)' }}>
+                                       <td colSpan={4} className="p-3">
+                                         <form onSubmit={(e) => { e.preventDefault(); handleEditEventSave(ev.id); }} className="flex flex-col gap-2">
+                                           <div className="flex flex-wrap items-center gap-2">
+                                             <select
+                                               className="form-input text-xs"
+                                               style={{ width: '140px' }}
+                                               value={editEventType}
+                                               onChange={e => setEditEventType(e.target.value)}
+                                             >
+                                               {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                                             </select>
+                                             <select
+                                               className="form-input text-xs"
+                                               style={{ width: '110px' }}
+                                               value={editEventStatus}
+                                               onChange={e => setEditEventStatus(e.target.value)}
+                                             >
+                                               {EVENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                                             </select>
+                                             <label className="checkbox-label text-xs flex items-center gap-1 cursor-pointer">
+                                               <input
+                                                 type="checkbox"
+                                                 checked={editIncludeInSummary}
+                                                 onChange={e => setEditIncludeInSummary(e.target.checked)}
+                                               />
+                                               <span className="text-gray-300 font-medium">Include in Summary</span>
+                                             </label>
+                                           </div>
+                                           <div className="flex gap-2">
+                                             <input
+                                               type="text"
+                                               className="form-input text-xs flex-1"
+                                               value={editEventNote}
+                                               onChange={e => setEditEventNote(e.target.value)}
+                                               placeholder="Edit progress note..."
+                                               required
+                                             />
+                                             <button type="submit" className="button small-btn" disabled={eventUpdating} title="Save changes">
+                                               Save
+                                             </button>
+                                             <button type="button" onClick={() => setEditingEventId(null)} className="button secondary small-btn" title="Cancel">
+                                               Cancel
+                                             </button>
+                                           </div>
+                                         </form>
+                                       </td>
+                                     </tr>
+                                   );
+                                 }
+
+                                 const typeSlug = (ev.event_type || 'note').toLowerCase().replace(/[\/\s]+/g, '-');
+
+                                 return (
+                                   <tr key={ev.id}>
+                                     <td>
+                                       <span className={`event-type-badge event-type-${typeSlug}`}>
+                                         {ev.event_type}
+                                       </span>
+                                     </td>
+                                     <td>
+                                       <div className="flex items-center gap-2 flex-wrap">
+                                         <span>{cleanDisplayNote}</span>
+                                         {isSummary && (
+                                           <span className="summary-indicator-badge" title="Flagged for inclusion in Service Summary">
+                                             📄 Summary
+                                           </span>
+                                         )}
+                                       </div>
+                                     </td>
+                                     <td className="text-muted">{new Date(ev.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</td>
+                                     <td>
+                                       <div className="flex gap-1">
+                                         <button onClick={() => startEditEvent(ev)} className="icon-button" title="Edit this entry"><Pencil size={14}/></button>
+                                         <button onClick={() => handleDeleteEvent(ev.id)} className="icon-button text-error" title="Delete entry"><Trash2 size={14}/></button>
+                                       </div>
+                                     </td>
+                                   </tr>
+                                 );
+                               })
                              )}
                            </tbody>
                          </table>
-                         <form onSubmit={handleAddEvent} className="mt-4 flex gap-2">
-                            <select className="form-input text-xs" style={{width:'120px'}} value={eventType} onChange={e=>setEventType(e.target.value)}>
-                              {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                            </select>
-                            <select className="form-input text-xs" style={{width:'100px'}} value={eventStatus} onChange={e=>setEventStatus(e.target.value)}>
-                              {EVENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                            <input type="text" className="form-input text-xs flex-1" placeholder="Add progress note..." value={eventNote} onChange={e=>setEventNote(e.target.value)} />
-                            <button type="submit" className="button small-btn" disabled={addingEvent}><Plus size={14}/></button>
+
+                         {/* Add Event Form with Specialized Credential/Account inputs */}
+                         <form onSubmit={handleAddEvent} className="mt-4 p-3 glass-panel" style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                           <div className="flex flex-wrap items-center gap-2 mb-2">
+                             <span className="text-xs font-bold text-gray-300">Add Log Entry:</span>
+                             <select className="form-input text-xs" style={{width:'150px'}} value={eventType} onChange={e=>setEventType(e.target.value)}>
+                               {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                             </select>
+                             <select className="form-input text-xs" style={{width:'110px'}} value={eventStatus} onChange={e=>setEventStatus(e.target.value)}>
+                               {EVENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                             </select>
+                             <label className="checkbox-label text-xs flex items-center gap-1 cursor-pointer">
+                               <input
+                                 type="checkbox"
+                                 checked={eventIncludeInSummary}
+                                 onChange={e => setEventIncludeInSummary(e.target.checked)}
+                               />
+                               <span className="text-gray-300 font-medium">Include in Summary</span>
+                             </label>
+                           </div>
+
+                           {/* Specialized Form for Credentials */}
+                           {eventType === 'Credentials' && (
+                             <div className="form-grid grid-cols-3 gap-2 mt-2 pt-2" style={{ borderTop: '1px dashed rgba(255,255,255,0.1)' }}>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">User ID / Login</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs"
+                                   placeholder="Username or email"
+                                   value={eventUserId}
+                                   onChange={e => setEventUserId(e.target.value)}
+                                   required
+                                 />
+                               </div>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">Password / PIN</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs monospace"
+                                   placeholder="Password or PIN"
+                                   value={eventPassword}
+                                   onChange={e => setEventPassword(e.target.value)}
+                                   required
+                                 />
+                               </div>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">Notes / Details</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs"
+                                   placeholder="Account context / notes"
+                                   value={eventCredNotes}
+                                   onChange={e => setEventCredNotes(e.target.value)}
+                                 />
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Specialized Form for Account */}
+                           {eventType === 'Account' && (
+                             <div className="form-grid grid-cols-3 gap-2 mt-2 pt-2" style={{ borderTop: '1px dashed rgba(255,255,255,0.1)' }}>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">App / Site</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs"
+                                   placeholder="e.g. Gmail, Verizon, Apple"
+                                   value={accountApp}
+                                   onChange={e => setAccountApp(e.target.value)}
+                                   required
+                                 />
+                               </div>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">Account Status</label>
+                                 <select
+                                   className="form-input text-xs"
+                                   value={accountStatus}
+                                   onChange={e => setAccountStatus(e.target.value)}
+                                 >
+                                   <option value="New">New</option>
+                                   <option value="Updated">Updated</option>
+                                   <option value="Recovered">Recovered</option>
+                                 </select>
+                               </div>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">User ID / Username</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs"
+                                   placeholder="User ID or Email"
+                                   value={accountUserId}
+                                   onChange={e => setAccountUserId(e.target.value)}
+                                   required
+                                 />
+                               </div>
+                               <div className="form-group mb-0">
+                                 <label className="form-label text-xs">Password / PIN</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs monospace"
+                                   placeholder="Password or PIN"
+                                   value={accountPassword}
+                                   onChange={e => setAccountPassword(e.target.value)}
+                                 />
+                               </div>
+                               <div className="form-group mb-0 span-2">
+                                 <label className="form-label text-xs">Account Notes</label>
+                                 <input
+                                   type="text"
+                                   className="form-input text-xs"
+                                   placeholder="Additional recovery details / notes"
+                                   value={accountNotes}
+                                   onChange={e => setAccountNotes(e.target.value)}
+                                 />
+                               </div>
+                             </div>
+                           )}
+
+                           {/* Standard Text Note Input */}
+                           {eventType !== 'Credentials' && eventType !== 'Account' && (
+                             <div className="flex gap-2 mt-2">
+                               <input
+                                 type="text"
+                                 className="form-input text-xs flex-1"
+                                 placeholder={eventType === 'Outcome' ? "Describe service outcome..." : eventType === 'Recommendations' ? "Add follow-up recommendation..." : "Add progress note..."}
+                                 value={eventNote}
+                                 onChange={e=>setEventNote(e.target.value)}
+                               />
+                               <button type="submit" className="button small-btn" disabled={addingEvent} title="Add Entry">
+                                 <Plus size={14}/> Add Entry
+                               </button>
+                             </div>
+                           )}
+
+                           {(eventType === 'Credentials' || eventType === 'Account') && (
+                             <div className="flex justify-end mt-3">
+                               <button type="submit" className="button small-btn" disabled={addingEvent}>
+                                 <Plus size={14}/> Add to Log &amp; Auto-Sync to Credentials
+                               </button>
+                             </div>
+                           )}
                          </form>
                       </div>
                     )}
                   </div>
 
+                  {/* Files Panel with Upload Button */}
                   <div className="detail-panel glass-panel">
-                    <h3 className="text-emerald-400"><Paperclip size={18} className="panel-icon" /> Files</h3>
-                    <div className="mt-4">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-emerald-400 m-0"><Paperclip size={18} className="panel-icon" /> Files</h3>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className="button secondary small-btn"
+                        title="Upload file attachment"
+                      >
+                        <Plus size={12} /> {uploading ? 'Uploading...' : 'Attach File'}
+                      </button>
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileUpload}
+                        style={{ display: 'none' }}
+                      />
+                    </div>
+                    <div className="mt-2">
                       <p className="text-muted text-xs mb-2">Ticket Attachments</p>
                       <ul className="file-list">
-                         {files.length === 0 ? <li className="text-muted text-xs">No files.</li> : files.map(f => (
-                           <li key={f.id} className="file-item p-2">
-                             <span className="file-name text-xs">{f.name}</span>
-                             <a href={f.url} target="_blank" rel="noreferrer" className="icon-button"><Download size={14}/></a>
+                         {files.length === 0 ? <li className="text-muted text-xs py-2">No files attached yet.</li> : files.map(f => (
+                           <li key={f.id} className="file-item p-2 flex justify-between items-center">
+                             <span className="file-name text-xs truncate max-w-[200px]" title={f.name}>{f.name}</span>
+                             <a href={f.url} target="_blank" rel="noreferrer" className="icon-button" title="Download"><Download size={14}/></a>
                            </li>
                          ))}
                       </ul>
@@ -1218,12 +1881,14 @@ export default function TechDashboard() {
                                         updateInvoiceItem(idx, 'price', price);
                                       }}
                                     >
-                                      <option value="">Quick Select Service...</option>
-                                      <optgroup label="Promotions">
+                                      <option value="">Quick Select Service / Discount...</option>
+                                      <optgroup label="Discounts & Surcharges">
+                                        <option value="Negotiated Discount|-$25.00">Negotiated Discount (-$25.00)</option>
+                                        <option value="Negotiated Discount|-$50.00">Negotiated Discount (-$50.00)</option>
+                                        <option value="Negotiated Discount|-$10.00">Negotiated Discount (-$10.00)</option>
+                                        <option value="Discount (%)|-10%">Discount (-10%)</option>
                                         <option value="Urgent Priority Surcharge ($50)|$50">Urgent Priority Surcharge ($50)</option>
                                         <option value="Urgent Priority Surcharge ($15/hr)|$15/hr">Urgent Priority Surcharge ($15/hr)</option>
-                                        <option value="Discount (Fixed)|-$10">Discount (Fixed)</option>
-                                        <option value="Discount (%)|-10%">Discount (%)</option>
                                       </optgroup>
                                       {serviceCategories.map(cat => (
                                         <optgroup key={cat.name} label={cat.name}>
@@ -1246,7 +1911,16 @@ export default function TechDashboard() {
                         <tfoot>
                           <tr>
                             <td colSpan={4}>
-                              <button onClick={addInvoiceItem} className="text-emerald-400 hover:text-emerald-300 text-sm font-semibold mt-2">+ Add Line Item</button>
+                              <div className="flex items-center gap-3">
+                                <button type="button" onClick={addInvoiceItem} className="text-emerald-400 hover:text-emerald-300 text-sm font-semibold mt-2">+ Add Line Item</button>
+                                <button
+                                  type="button"
+                                  onClick={() => setInvoiceFormItems([...invoiceFormItems, { description: 'Negotiated Discount', qty: 1, price: '-$25.00' }])}
+                                  className="text-amber-400 hover:text-amber-300 text-sm font-semibold mt-2"
+                                >
+                                  + Add Negotiated Discount
+                                </button>
+                              </div>
                             </td>
                           </tr>
                           <tr>

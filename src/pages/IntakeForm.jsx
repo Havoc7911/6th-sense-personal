@@ -10,6 +10,81 @@ import './IntakeForm.css';
 
 const DEVICE_TYPES = ['Smartphone', 'Tablet', 'Laptop', 'Desktop', 'Other'];
 
+const CARRIER_OPTIONS = [
+  'StraightTalk',
+  'TracFone',
+  'Total Wireless',
+  'Verizon',
+  'AT&T',
+  'US Mobile',
+  'Cricket',
+  'Visible',
+  'T-Mobile',
+  'Other',
+];
+
+const CREDENTIAL_TYPES = [
+  'Device screen lock PIN',
+  'Windows Login',
+  'Mac OS login',
+  'Account security PIN',
+  'Device Account',
+  'Google',
+  'Outlook',
+  'iCloud',
+  'Yahoo',
+  'Other',
+];
+
+const EMAIL_DOMAINS = {
+  Google: '@gmail.com',
+  Outlook: '@outlook.com',
+  iCloud: '@icloud.com',
+  Yahoo: '@yahoo.com',
+};
+
+const createInitialLine = () => ({
+  id: Date.now() + Math.random(),
+  type: 'Smartphone',
+  brand: '',
+  model: '',
+  os: '',
+  provider: '',
+  otherProvider: '',
+  lockStatus: '',
+  onPaymentPlan: '',
+  amountOwed: '',
+  managed: 'No',
+  upgradeEligible: '',
+  imei: '',
+  imei2: '',
+  iccid: '',
+  iccid2: '',
+  simType: '',
+  planType: 'Prepaid',
+  planName: '',
+  dataAllowance: '',
+  planPrice: '',
+  serviceStatus: 'Active',
+  phoneNumber: '',
+  hasServicePin: false,
+  hasSimKit: false,
+  servicePin: '',
+  servicePinPlan: '',
+  servicePinPrice: '',
+  servicePinProvider: '',
+});
+
+const createInitialCredential = (type = 'Device screen lock PIN') => ({
+  id: Date.now() + Math.random(),
+  type,
+  accountName: '',
+  username: EMAIL_DOMAINS[type] || '',
+  password: '',
+  requires2FA: false,
+  targetDevice: 'all',
+});
+
 const USAGE_OPTIONS = [
   'Calling/Texting', 'Video Calls', 'Generative AI', 'Documents', 
   'Spreadsheets', 'Notes', 'Collaboration', 'Email', 
@@ -56,13 +131,13 @@ export default function IntakeForm() {
     state: '',
     householdSize: '',
     veteranStatus: '',
-    lines: [{ id: Date.now(), type: 'Smartphone', brand: '', model: '', os: '', provider: '', lockStatus: '', onPaymentPlan: '', amountOwed: '', managed: '', upgradeEligible: '', imei: '', iccid: '', simType: '' }],
+    lines: [createInitialLine()],
     otherUsage: '',
     otherSubscription: '',
     otherBrand: ''
   });
 
-  const [credentials, setCredentials] = useState([{ id: Date.now(), type: 'Login', username: '', password: '' }]);
+  const [credentials, setCredentials] = useState([createInitialCredential('Device screen lock PIN')]);
 
   // Pre-select service from URL params
   useEffect(() => {
@@ -93,8 +168,8 @@ export default function IntakeForm() {
 
   const set = (field, value) => setFormData(prev => ({ ...prev, [field]: value }));
 
-  const addCredential = (type = 'Login') => {
-    setCredentials([...credentials, { id: Date.now(), type, username: '', password: '' }]);
+  const addCredential = (type = 'Device screen lock PIN') => {
+    setCredentials([...credentials, createInitialCredential(type)]);
   };
 
   const getSuggestedCredentials = () => {
@@ -106,40 +181,37 @@ export default function IntakeForm() {
     const deviceType = primaryLine.type;
 
     // Service-based suggestions
-    if (serviceType === 'account-email-sso') suggestions.add('Email/Account Password');
-    if (serviceType === 'password-manager') suggestions.add('Master Password');
-    if (serviceType === 'cloud-storage-setup') suggestions.add('Cloud Login (iCloud/OneDrive)');
+    if (serviceType === 'account-email-sso') suggestions.add('Google');
+    if (serviceType === 'password-manager') suggestions.add('Other');
+    if (serviceType === 'cloud-storage-setup') suggestions.add('iCloud');
     if (['switch-carriers', 'psim-esim-install', 'activate-mobile', 'carrier-unlocking', 'number-porting'].includes(serviceType)) {
-      suggestions.add('Carrier Login (Username/Email & Password)');
-      suggestions.add('Carrier Security PIN/Passcode');
+      suggestions.add('Account security PIN');
+      suggestions.add('Device Account');
     }
-    if (serviceType === 'screen-lock-bypass') suggestions.add('Original Google/Apple ID (Activation Lock)');
-    if (serviceType === 'factory-reset') suggestions.add('Google/Apple ID (Activation Lock)');
+    if (serviceType === 'screen-lock-bypass' || serviceType === 'factory-reset') {
+      suggestions.add('Google');
+      suggestions.add('iCloud');
+    }
 
     // Device/OS based suggestions
     if (deviceType === 'Smartphone' || deviceType === 'Tablet') {
-      suggestions.add('Screen PIN/Passcode');
+      suggestions.add('Device screen lock PIN');
       if (osLower.includes('ios') || brandLower.includes('apple') || brandLower.includes('ipad') || brandLower.includes('iphone')) {
-        suggestions.add('Apple ID');
+        suggestions.add('iCloud');
       } else if (osLower.includes('android') || brandLower.includes('samsung') || brandLower.includes('google') || brandLower.includes('motorola')) {
-        suggestions.add('Google Account');
+        suggestions.add('Google');
       }
     } else if (deviceType === 'Laptop' || deviceType === 'Desktop') {
       if (osLower.includes('windows')) {
-        suggestions.add('Windows Login PIN/Password');
-        suggestions.add('Microsoft Account');
+        suggestions.add('Windows Login');
+        suggestions.add('Outlook');
       } else if (osLower.includes('mac') || brandLower.includes('apple')) {
-        suggestions.add('Mac Login Password');
-        suggestions.add('Apple ID');
+        suggestions.add('Mac OS login');
+        suggestions.add('iCloud');
       } else {
-        suggestions.add('Computer Login Password');
+        suggestions.add('Device Account');
       }
     }
-
-    // Always suggest 2FA options
-    suggestions.add('2FA (Code to Phone)');
-    suggestions.add('2FA (Code to Email)');
-    suggestions.add('2FA (Authenticator App)');
 
     return Array.from(suggestions);
   };
@@ -149,7 +221,21 @@ export default function IntakeForm() {
   };
 
   const updateCredential = (id, field, value) => {
-    setCredentials(credentials.map(c => c.id === id ? { ...c, [field]: value } : c));
+    setCredentials(credentials.map(c => {
+      if (c.id !== id) return c;
+      const updated = { ...c, [field]: value };
+      if (field === 'type') {
+        const domain = EMAIL_DOMAINS[value];
+        if (domain) {
+          const cur = c.username || '';
+          if (!cur || cur.startsWith('@') || Object.values(EMAIL_DOMAINS).some(d => cur.endsWith(d))) {
+            const prefix = cur ? cur.split('@')[0] : '';
+            updated.username = prefix ? `${prefix}${domain}` : domain;
+          }
+        }
+      }
+      return updated;
+    }));
   };
 
   const updateAudit = (field, value) => setAuditData(prev => ({ ...prev, [field]: value }));
@@ -165,7 +251,7 @@ export default function IntakeForm() {
   const addLine = () => {
     setAuditData(prev => ({
       ...prev,
-      lines: [...prev.lines, { id: Date.now(), type: 'Smartphone', brand: '', model: '', os: '', provider: '', lockStatus: '', onPaymentPlan: '', amountOwed: '', managed: '', upgradeEligible: '', imei: '', iccid: '', simType: '' }]
+      lines: [...prev.lines, createInitialLine()]
     }));
   };
 
@@ -193,12 +279,15 @@ export default function IntakeForm() {
     setSubmitting(true);
     try {
       const primaryLine = auditData.lines[0] || {};
+      const primaryProvider = (primaryLine.provider === 'Other' ? primaryLine.otherProvider : primaryLine.provider) || null;
       const ticketCode = generateTicketCode();
       const credPayload = credentials.map((c) => ({
         type: c.type,
+        accountName: c.accountName || null,
         username: c.username,
         password: c.password,
         requires2FA: c.requires2FA || false,
+        targetDevice: c.targetDevice || 'all',
       }));
       const isMobileSvc = ['switch-carriers', 'psim-esim-install', 'activate-mobile', 'carrier-unlocking', 'number-porting'].includes(formData.serviceType);
       let finalNotes = formData.notes || '';
@@ -238,18 +327,34 @@ export default function IntakeForm() {
         ];
         
         auditData.lines.forEach((l, idx) => {
-          auditDetails.push(`\nLine ${idx+1}: ${l.brand} ${l.model} (${l.os}) | Lock: ${l.lockStatus} | Owed: ${l.amountOwed} | Managed: ${l.managed} | Upgrade: ${l.upgradeEligible} | IMEI: ${l.imei} | ICCID: ${l.iccid} | SIM: ${l.simType}`);
+          const p = l.provider === 'Other' ? (l.otherProvider || 'Other') : (l.provider || 'N/A');
+          auditDetails.push(`\nLine ${idx+1}: ${l.brand} ${l.model} (${l.os}) | Provider: ${p} | Lock: ${l.lockStatus} | Owed: ${l.amountOwed} | Managed: ${l.managed} | Upgrade: ${l.upgradeEligible} | IMEI 1: ${l.imei || 'N/A'}${l.imei2 ? ` | IMEI 2: ${l.imei2}` : ''} | ICCID 1: ${l.iccid || 'N/A'}${l.iccid2 ? ` | ICCID 2: ${l.iccid2}` : ''} | SIM: ${l.simType}`);
         });
 
         finalNotes += (finalNotes ? '\n\n' : '') + '--- Audit Questionnaire Details ---\n' + auditDetails.join('\n');
       }
 
       // Add line details for all forms if present
-      if (auditData.lines.length > 0 && (auditData.lines[0].brand || auditData.lines[0].model || auditData.lines[0].imei)) {
-        const lineDetails = auditData.lines.map((l, idx) => 
-          `Line ${idx+1}: ${l.brand} ${l.model} (${l.os}) | Lock: ${l.lockStatus} | Owed: ${l.amountOwed} | Managed: ${l.managed} | Upgrade: ${l.upgradeEligible} | IMEI: ${l.imei} | ICCID: ${l.iccid} | SIM: ${l.simType}`
-        );
-        finalNotes += (finalNotes ? '\n\n' : '') + '--- Per-Line Device Details ---\n' + lineDetails.join('\n');
+      if (auditData.lines.length > 0 && (auditData.lines[0].brand || auditData.lines[0].model || auditData.lines[0].imei || auditData.lines[0].provider)) {
+        const lineDetails = auditData.lines.map((l, idx) => {
+          const providerDisp = l.provider === 'Other' ? (l.otherProvider || 'Other') : (l.provider || 'N/A');
+          const planInfo = [
+            l.phoneNumber ? `Phone: ${l.phoneNumber}` : null,
+            l.planType ? `Plan Type: ${l.planType}` : null,
+            l.planName ? `Plan: ${l.planName}` : null,
+            l.dataAllowance ? `Data: ${l.dataAllowance}` : null,
+            l.planPrice ? `Cost: ${l.planPrice}` : null,
+            l.serviceStatus ? `Status: ${l.serviceStatus}` : null,
+          ].filter(Boolean).join(' | ');
+
+          const redemptionInfo = (l.hasServicePin || l.hasSimKit) ? [
+            l.hasSimKit ? '[SIM Kit: Yes]' : null,
+            l.hasServicePin ? `[Service Card PIN: ${l.servicePin || 'Provided'} (Plan: ${l.servicePinPlan || 'N/A'}, Price: ${l.servicePinPrice || 'N/A'}, Provider: ${l.servicePinProvider || providerDisp})]` : null
+          ].filter(Boolean).join(' ') : '';
+
+          return `Line ${idx+1}: ${l.brand || ''} ${l.model || ''} (${l.os || l.type}) | Provider: ${providerDisp} | IMEI 1: ${l.imei || 'N/A'}${l.imei2 ? ` | IMEI 2: ${l.imei2}` : ''} | ICCID 1: ${l.iccid || 'N/A'}${l.iccid2 ? ` | ICCID 2: ${l.iccid2}` : ''} | SIM: ${l.simType || 'N/A'} | Lock: ${l.lockStatus || 'N/A'} | Owed: ${l.amountOwed || '$0'} | Managed: ${l.managed || 'No'}${planInfo ? `\n   Plan Details: ${planInfo}` : ''}${redemptionInfo ? `\n   Card/Kit: ${redemptionInfo}` : ''}`;
+        });
+        finalNotes += (finalNotes ? '\n\n' : '') + '--- Per-Line Device & Service Details ---\n' + lineDetails.join('\n');
       }
 
       const isAudit = formData.serviceType === 'cost-saving-audit';
@@ -265,7 +370,7 @@ export default function IntakeForm() {
         os: primaryLine.os,
         imei: primaryLine.imei || null,
         iccid: primaryLine.iccid || null,
-        provider: primaryLine.provider || null,
+        provider: primaryProvider,
         snap_medicaid: formData.snapMedicaid,
         hardship_financing: formData.hardshipFinancing,
         hardship_details: formData.hardshipDetails || null,
@@ -283,9 +388,13 @@ export default function IntakeForm() {
           brand: primaryLine.brand,
           model: primaryLine.model,
           os: primaryLine.os,
-          provider: primaryLine.provider,
+          provider: primaryProvider,
           imei: primaryLine.imei,
-          iccid: primaryLine.iccid
+          imei2: primaryLine.imei2,
+          iccid: primaryLine.iccid,
+          iccid2: primaryLine.iccid2,
+          credentials: credPayload,
+          lines: auditData.lines,
         }
       });
       navigate('/success', { state: { ticketCode, type: 'intake' } });
@@ -491,9 +600,9 @@ export default function IntakeForm() {
             {auditData.lines.map((line, idx) => (
               <div key={line.id} className="line-card glass-panel mb-4">
                 <div className="flex justify-between items-center mb-3">
-                  <span className="font-bold text-primary">{idx === 0 ? 'Primary Device' : `Additional Device #${idx}`}</span>
+                  <span className="font-bold text-primary">{idx === 0 ? 'Primary Device / Line' : `Additional Device / Line #${idx + 1}`}</span>
                   {auditData.lines.length > 1 && (
-                    <button type="button" onClick={() => removeLine(line.id)} className="text-red-400 hover:text-red-300"><Trash2 size={16} /></button>
+                    <button type="button" onClick={() => removeLine(line.id)} className="text-red-400 hover:text-red-300" title="Remove line"><Trash2 size={16} /></button>
                   )}
                 </div>
                 <div className="form-grid grid-cols-2">
@@ -503,48 +612,77 @@ export default function IntakeForm() {
                       {DEVICE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </div>
+
+                  {/* Carrier / Provider Dropdown */}
                   <div className="form-group">
-                    <label className="form-label text-xs">Provider / Carrier</label>
-                    <input type="text" className="form-input text-sm" placeholder="e.g. Verizon" value={line.provider} onChange={e => updateLine(line.id, 'provider', e.target.value)} />
+                    <label className="form-label text-xs">Current Provider / Carrier</label>
+                    <select className="form-input text-sm" value={line.provider} onChange={e => updateLine(line.id, 'provider', e.target.value)}>
+                      <option value="">Select Provider...</option>
+                      {CARRIER_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    {line.provider === 'Other' && (
+                      <input
+                        type="text"
+                        className="form-input text-sm mt-2"
+                        placeholder="Specify other provider..."
+                        value={line.otherProvider || ''}
+                        onChange={e => updateLine(line.id, 'otherProvider', e.target.value)}
+                      />
+                    )}
                   </div>
+
                   <div className="form-group">
                     <label className="form-label text-xs">Brand</label>
-                    <input type="text" className="form-input text-sm" value={line.brand} onChange={e => updateLine(line.id, 'brand', e.target.value)} />
+                    <input type="text" className="form-input text-sm" placeholder="e.g. Apple, Samsung" value={line.brand} onChange={e => updateLine(line.id, 'brand', e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label className="form-label text-xs">Model</label>
-                    <input type="text" className="form-input text-sm" value={line.model} onChange={e => updateLine(line.id, 'model', e.target.value)} />
+                    <input type="text" className="form-input text-sm" placeholder="e.g. iPhone 14 Pro, Galaxy S23" value={line.model} onChange={e => updateLine(line.id, 'model', e.target.value)} />
                   </div>
                   <div className="form-group">
-                    <label className="form-label text-xs">OS</label>
-                    <input type="text" className="form-input text-sm" value={line.os} onChange={e => updateLine(line.id, 'os', e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label text-xs">IMEI / Serial</label>
-                    <input type="text" className="form-input text-sm monospace" placeholder="IMEI or Serial Number" value={line.imei} onChange={e => updateLine(line.id, 'imei', e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label text-xs">ICCID / SIM</label>
-                    <input type="text" className="form-input text-sm monospace" placeholder="SIM Card Number" value={line.iccid} onChange={e => updateLine(line.id, 'iccid', e.target.value)} />
+                    <label className="form-label text-xs">Operating System</label>
+                    <input type="text" className="form-input text-sm" placeholder="e.g. iOS 17, Android 14, Windows 11" value={line.os} onChange={e => updateLine(line.id, 'os', e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label className="form-label text-xs">SIM Type</label>
                     <select className="form-input text-sm" value={line.simType} onChange={e => updateLine(line.id, 'simType', e.target.value)}>
-                      <option value="">None</option>
-                      <option value="pSIM">Physical SIM</option>
+                      <option value="">Select SIM type...</option>
+                      <option value="pSIM">Physical SIM (pSIM)</option>
                       <option value="eSIM">Digital eSIM</option>
+                      <option value="None">None</option>
                     </select>
                   </div>
+
+                  {/* Dual IMEI Spaces */}
+                  <div className="form-group">
+                    <label className="form-label text-xs">IMEI 1 (Primary IMEI / Serial)</label>
+                    <input type="text" className="form-input text-sm monospace" placeholder="Primary 15-digit IMEI" value={line.imei || ''} onChange={e => updateLine(line.id, 'imei', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label text-xs">IMEI 2 (Secondary / eSIM)</label>
+                    <input type="text" className="form-input text-sm monospace" placeholder="Secondary IMEI 2 (optional)" value={line.imei2 || ''} onChange={e => updateLine(line.id, 'imei2', e.target.value)} />
+                  </div>
+
+                  {/* Dual ICCID Spaces */}
+                  <div className="form-group">
+                    <label className="form-label text-xs">ICCID 1 (Primary SIM Number)</label>
+                    <input type="text" className="form-input text-sm monospace" placeholder="Primary 20-digit ICCID" value={line.iccid || ''} onChange={e => updateLine(line.id, 'iccid', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label text-xs">ICCID 2 (Secondary SIM Number)</label>
+                    <input type="text" className="form-input text-sm monospace" placeholder="Secondary ICCID 2 (optional)" value={line.iccid2 || ''} onChange={e => updateLine(line.id, 'iccid2', e.target.value)} />
+                  </div>
+
                   <div className="form-group">
                     <label className="form-label text-xs">Lock Status</label>
                     <select className="form-input text-sm" value={line.lockStatus} onChange={e => updateLine(line.id, 'lockStatus', e.target.value)}>
                       <option value="">Unknown</option>
-                      <option value="Locked">Locked</option>
+                      <option value="Locked">Locked to carrier</option>
                       <option value="Unlocked">Unlocked</option>
                     </select>
                   </div>
                   <div className="form-group">
-                    <label className="form-label text-xs">Still Owed ($)</label>
+                    <label className="form-label text-xs">Still Owed on Device ($)</label>
                     <input type="text" className="form-input text-sm" placeholder="e.g. $250 or None" value={line.amountOwed} onChange={e => updateLine(line.id, 'amountOwed', e.target.value)} />
                   </div>
                   <div className="form-group">
@@ -558,10 +696,112 @@ export default function IntakeForm() {
                   <div className="form-group">
                     <label className="form-label text-xs">Managed Device?</label>
                     <select className="form-input text-sm" value={line.managed} onChange={e => updateLine(line.id, 'managed', e.target.value)}>
-                      <option value="No">No</option>
+                      <option value="No">No (Personal)</option>
                       <option value="Work">Work Managed</option>
                       <option value="School">School Managed</option>
                     </select>
+                  </div>
+
+                  {/* ─── Service Plan & Line Information ─── */}
+                  <div className="full-width" style={{ gridColumn: '1 / -1', marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px dashed rgba(255,255,255,0.1)' }}>
+                    <h4 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Service Plan &amp; Line Details</h4>
+                    <div className="form-grid grid-cols-3">
+                      <div className="form-group">
+                        <label className="form-label text-xs">Service Plan Type</label>
+                        <select className="form-input text-sm" value={line.planType || 'Prepaid'} onChange={e => updateLine(line.id, 'planType', e.target.value)}>
+                          <option value="Prepaid">Prepaid</option>
+                          <option value="Postpaid">Postpaid</option>
+                          <option value="Unknown">Unknown</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label text-xs">Plan Name</label>
+                        <input type="text" className="form-input text-sm" placeholder="e.g. Unlimited Plus" value={line.planName || ''} onChange={e => updateLine(line.id, 'planName', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label text-xs">Data Allowance</label>
+                        <input type="text" className="form-input text-sm" placeholder="e.g. Unlimited, 15GB" value={line.dataAllowance || ''} onChange={e => updateLine(line.id, 'dataAllowance', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label text-xs">Cost Per Month ($)</label>
+                        <input type="text" className="form-input text-sm" placeholder="e.g. $45/mo" value={line.planPrice || ''} onChange={e => updateLine(line.id, 'planPrice', e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label text-xs">Current Service Status</label>
+                        <select className="form-input text-sm" value={line.serviceStatus || 'Active'} onChange={e => updateLine(line.id, 'serviceStatus', e.target.value)}>
+                          <option value="Active">Active</option>
+                          <option value="Inactive">Inactive</option>
+                          <option value="Suspended">Suspended</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label text-xs">Line Phone Number</label>
+                        <input type="text" className="form-input text-sm" placeholder="e.g. (724) 555-0199" value={line.phoneNumber || ''} onChange={e => updateLine(line.id, 'phoneNumber', e.target.value)} />
+                      </div>
+                    </div>
+
+                    {/* Checkboxes: Service Card PIN and SIM Card Kit */}
+                    <div className="flex flex-wrap gap-5 mt-3 mb-2">
+                      <label className="checkbox-label" style={{ fontSize: '0.85rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={line.hasServicePin || false}
+                          onChange={e => updateLine(line.id, 'hasServicePin', e.target.checked)}
+                          style={{ width: '16px', height: '16px' }}
+                        />
+                        <span>I have a service card/PIN to redeem</span>
+                      </label>
+                      <label className="checkbox-label" style={{ fontSize: '0.85rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={line.hasSimKit || false}
+                          onChange={e => updateLine(line.id, 'hasSimKit', e.target.checked)}
+                          style={{ width: '16px', height: '16px' }}
+                        />
+                        <span>I have a SIM card kit</span>
+                      </label>
+                    </div>
+
+                    {/* Conditional section if either is checked */}
+                    {(line.hasServicePin || line.hasSimKit) && (
+                      <div className="conditional-service-card animate-fade-in" style={{
+                        background: 'rgba(255, 107, 0, 0.06)',
+                        border: '1px solid rgba(255, 107, 0, 0.25)',
+                        borderRadius: '6px',
+                        padding: '1rem',
+                        marginTop: '0.75rem'
+                      }}>
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="font-semibold text-sm text-primary">Redemption &amp; SIM Kit Details</span>
+                          {line.hasSimKit && (
+                            <span className="status-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600 }}>
+                              ✓ Client has a SIM card kit on hand
+                            </span>
+                          )}
+                        </div>
+                        <div className="form-grid grid-cols-2">
+                          <div className="form-group">
+                            <label className="form-label text-xs">Provider</label>
+                            <select className="form-input text-sm" value={line.servicePinProvider || line.provider || ''} onChange={e => updateLine(line.id, 'servicePinProvider', e.target.value)}>
+                              <option value="">Select Provider...</option>
+                              {CARRIER_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label text-xs">Service Card PIN / Redemption Code</label>
+                            <input type="text" className="form-input text-sm monospace" placeholder="e.g. 1234-5678-9012" value={line.servicePin || ''} onChange={e => updateLine(line.id, 'servicePin', e.target.value)} />
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label text-xs">Plan / Denomination</label>
+                            <input type="text" className="form-input text-sm" placeholder="e.g. $45 Unlimited 30-Day" value={line.servicePinPlan || ''} onChange={e => updateLine(line.id, 'servicePinPlan', e.target.value)} />
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label text-xs">Purchase Price ($)</label>
+                            <input type="text" className="form-input text-sm" placeholder="e.g. $45.00" value={line.servicePinPrice || ''} onChange={e => updateLine(line.id, 'servicePinPrice', e.target.value)} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -645,35 +885,148 @@ export default function IntakeForm() {
               );
             })()}
             
-            {credentials.map((cred) => (
-              <div key={cred.id} className="credential-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '0.75rem', alignItems: 'start', marginBottom: '1.25rem', background: 'rgba(255,255,255,0.02)', padding: '1rem', borderRadius: '8px' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <input type="text" className="form-input" placeholder="Type (e.g. Screen PIN, Apple ID)" value={cred.type} onChange={e => updateCredential(cred.id, 'type', e.target.value)} required />
+            {credentials.map((cred, credIdx) => {
+              const isDomainEmail = ['Google', 'Outlook', 'iCloud', 'Yahoo'].includes(cred.type);
+              const isOther = cred.type === 'Other';
+              const isSecurityPin = cred.type === 'Account security PIN';
+              const hasMultipleDevices = auditData.lines.length > 1;
+
+              return (
+                <div key={cred.id} className="credential-row glass-panel" style={{
+                  marginBottom: '1.25rem',
+                  padding: '1.25rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)'
+                }}>
+                  <div className="flex justify-between items-center mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-primary uppercase tracking-wider">Credential #{credIdx + 1}</span>
+                      {isDomainEmail && (
+                        <span className="badge" style={{ background: 'rgba(255,107,0,0.12)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>
+                          {EMAIL_DOMAINS[cred.type]}
+                        </span>
+                      )}
+                    </div>
+                    {credentials.length > 1 && (
+                      <button type="button" onClick={() => removeCredential(cred.id)} className="text-red-400 hover:text-red-300 icon-button" title="Remove Credential">
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="form-grid grid-cols-3">
+                    {/* Dropdown in place of login text input */}
+                    <div className="form-group">
+                      <label className="form-label text-xs">Credential Type</label>
+                      <select
+                        className="form-input text-sm"
+                        value={cred.type}
+                        onChange={(e) => updateCredential(cred.id, 'type', e.target.value)}
+                      >
+                        {CREDENTIAL_TYPES.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* If Account security PIN is selected: Account Name input */}
+                    {isSecurityPin && (
+                      <div className="form-group">
+                        <label className="form-label text-xs">Account Name</label>
+                        <input
+                          type="text"
+                          className="form-input text-sm"
+                          placeholder="e.g. Verizon, AT&T, Bank"
+                          value={cred.accountName || ''}
+                          onChange={(e) => updateCredential(cred.id, 'accountName', e.target.value)}
+                          required
+                        />
+                      </div>
+                    )}
+
+                    {/* If Other is selected: App / Service / Account Name */}
+                    {isOther && (
+                      <div className="form-group">
+                        <label className="form-label text-xs">App / Service / Account</label>
+                        <input
+                          type="text"
+                          className="form-input text-sm"
+                          placeholder="e.g. Netflix, Banking, WiFi"
+                          value={cred.accountName || ''}
+                          onChange={(e) => updateCredential(cred.id, 'accountName', e.target.value)}
+                          required
+                        />
+                      </div>
+                    )}
+
+                    {/* Username / Email field */}
+                    {!isSecurityPin && (
+                      <div className="form-group">
+                        <label className="form-label text-xs">
+                          {isDomainEmail ? `${cred.type} Email / Username` : 'Username / Login ID'}
+                        </label>
+                        <input
+                          type="text"
+                          className="form-input text-sm"
+                          placeholder={isDomainEmail ? `username${EMAIL_DOMAINS[cred.type]}` : 'Username or Email'}
+                          value={cred.username}
+                          onChange={(e) => updateCredential(cred.id, 'username', e.target.value)}
+                          required={!['Device screen lock PIN'].includes(cred.type)}
+                        />
+                      </div>
+                    )}
+
+                    {/* Password / PIN field */}
+                    <div className="form-group">
+                      <label className="form-label text-xs">
+                        {cred.type.includes('PIN') ? 'PIN / Passcode' : 'Password / PIN'}
+                      </label>
+                      <input
+                        type="text"
+                        className="form-input text-sm monospace"
+                        placeholder={cred.type.includes('PIN') ? 'Enter PIN/Passcode' : 'Password'}
+                        value={cred.password}
+                        onChange={(e) => updateCredential(cred.id, 'password', e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    {/* Multi-device selector if more than 1 device exists */}
+                    {hasMultipleDevices && (
+                      <div className="form-group">
+                        <label className="form-label text-xs">Applies to Device</label>
+                        <select
+                          className="form-input text-sm"
+                          value={cred.targetDevice || 'all'}
+                          onChange={(e) => updateCredential(cred.id, 'targetDevice', e.target.value)}
+                        >
+                          <option value="all">All Devices</option>
+                          {auditData.lines.map((l, i) => (
+                            <option key={l.id} value={`device-${i + 1}`}>
+                              Device #{i + 1}: {l.brand ? `${l.brand} ${l.model || ''}`.trim() : l.type || `Device ${i + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Keep 2FA Checkbox */}
+                  <div className="mt-2 pt-2" style={{ borderTop: '1px dashed rgba(255,255,255,0.06)' }}>
+                    <label className="checkbox-label" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={cred.requires2FA || false} 
+                        onChange={(e) => updateCredential(cred.id, 'requires2FA', e.target.checked)} 
+                        style={{ width: '16px', height: '16px' }}
+                      />
+                      <span>This account requires Two-Factor Authentication (2FA)</span>
+                    </label>
+                  </div>
                 </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <input type="text" className="form-input" placeholder="Username / Email" value={cred.username} onChange={e => updateCredential(cred.id, 'username', e.target.value)} />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <input type="text" className="form-input" placeholder="Password / PIN" value={cred.password} onChange={e => updateCredential(cred.id, 'password', e.target.value)} required />
-                </div>
-                {credentials.length > 1 && (
-                  <button type="button" onClick={() => removeCredential(cred.id)} className="icon-button delete-btn" title="Remove" style={{ padding: '0.6rem' }}>
-                    <Trash2 size={20} />
-                  </button>
-                )}
-                <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: 0, marginTop: '0.5rem' }}>
-                  <label className="checkbox-label" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    <input 
-                      type="checkbox" 
-                      checked={cred.requires2FA || false} 
-                      onChange={e => updateCredential(cred.id, 'requires2FA', e.target.checked)} 
-                      style={{ width: '16px', height: '16px' }}
-                    />
-                    <span>This account requires Two-Factor Authentication (2FA)</span>
-                  </label>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* ─── Audit Special Form ─── */}

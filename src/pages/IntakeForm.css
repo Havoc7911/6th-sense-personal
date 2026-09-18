@@ -65,16 +65,13 @@
 }
 
 .credential-row {
-  display: flex;
-  gap: 1rem;
-  align-items: flex-start;
-  margin-bottom: 1rem;
+  display: block;
+  margin-bottom: 1.25rem;
   animation: fadeIn 0.3s ease;
 }
 
-.credential-row .form-group {
-  flex: 1;
-  margin-bottom: 0;
+.monospace {
+  font-family: 'JetBrains Mono', 'Courier New', Courier, monospace;
 }
 
 .icon-button {

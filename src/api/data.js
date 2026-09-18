@@ -503,24 +503,32 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
 
   const itemsHtml = items.map(item => {
     let lineTotalDisplay = 'TBD';
+    const isNegative = String(item.price || '').includes('-') || String(item.description || '').toLowerCase().includes('discount');
     const cleanPrice = String(item.price || '').replace(/[^0-9.]/g, '');
-    const numPrice = parseFloat(cleanPrice);
+    let numPrice = parseFloat(cleanPrice);
     
     if (!isNaN(numPrice) && !String(item.price).includes('/hr')) {
+      if (isNegative && numPrice > 0) numPrice = -numPrice;
       const qty = parseFloat(item.qty) || 1;
       const lineTotal = numPrice * qty;
       subtotal += lineTotal;
-      lineTotalDisplay = '$' + lineTotal.toFixed(2);
+      if (lineTotal < 0) {
+        lineTotalDisplay = `-$${Math.abs(lineTotal).toFixed(2)}`;
+      } else {
+        lineTotalDisplay = '$' + lineTotal.toFixed(2);
+      }
     } else {
       hasPendingOrHourly = true;
     }
 
+    const isDiscountRow = isNegative || (typeof lineTotalDisplay === 'string' && lineTotalDisplay.startsWith('-'));
+
     return `
-      <tr>
+      <tr style="${isDiscountRow ? 'color: #166534; font-weight: 500;' : ''}">
         <td>${item.description}</td>
         <td>${item.qty || 1}</td>
         <td>${item.price || 'TBD'}</td>
-        <td class="amount-col">${lineTotalDisplay}</td>
+        <td class="amount-col" style="${isDiscountRow ? 'color: #166534; font-weight: 600;' : ''}">${lineTotalDisplay}</td>
       </tr>
     `;
   }).join('');
