@@ -6,6 +6,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { getServicePricing } from '../lib/services';
 import { formatPhone } from '../lib/formatPhone';
 import { generateTicketCode } from '../lib/ticketCode';
+import AuditWizard from '../components/CostSavingAudit/AuditWizard';
 import './IntakeForm.css';
 
 const DEVICE_TYPES = ['Smartphone', 'Tablet', 'Laptop', 'Desktop', 'Other'];
@@ -415,6 +416,28 @@ export default function IntakeForm() {
   const selectedServiceInfo = formData.serviceType && !formData.serviceType.startsWith('promo-')
     ? getServicePricing(formData.serviceType)
     : null;
+
+  if (formData.serviceType === 'cost-saving-audit') {
+    return (
+      <div className="intake-page page-container animate-fade-in">
+        <div className="section-header">
+          <h1 className="section-title">Cost-Saving Technology Audit</h1>
+          <p className="subtitle">
+            A frictionless, rapid-fire assessment screening for hidden mobile discounts, AI seat redundancies, cloud bundles, and payment cashback yields.
+          </p>
+        </div>
+
+        <AuditWizard
+          onComplete={(ticketCode) => {
+            // Handled in-place by SavingsReport with portal links & scheduling
+          }}
+          onSwitchToStandardIntake={() => {
+            setFormData(prev => ({ ...prev, serviceType: 'general-consultation' }));
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="intake-page page-container animate-fade-in">
