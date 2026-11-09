@@ -69,10 +69,7 @@ function PromotionsPanel() {
 
   const handleEdit = (p) => {
     setEditId(p.id);
-    const parts = (p.description || '').split('|||');
-    const desc = parts[0].trim();
-    const price = parts.length > 1 ? parts[1].trim() : '';
-    setFormData({ title: p.title, description: desc, price, code: p.code || '', active: p.active });
+    setFormData({ title: p.title, description: p.description || '', price: p.price || '', code: p.code || '', active: p.active });
     setIsEditing(true);
   };
 
@@ -91,8 +88,13 @@ function PromotionsPanel() {
     e.preventDefault();
     setSaving(true);
     try {
-      const finalDesc = formData.price ? `${formData.description.trim()} ||| ${formData.price.trim()}` : formData.description.trim();
-      const payload = { ...formData, description: finalDesc };
+      const payload = {
+        title: formData.title.trim(),
+        description: formData.description.trim(),
+        price: formData.price ? formData.price.trim() : null,
+        code: formData.code ? formData.code.trim() : null,
+        active: formData.active,
+      };
       if (editId) {
         await updatePromotion(editId, payload);
       } else {
@@ -193,9 +195,10 @@ function PromotionsPanel() {
                     <button onClick={() => handleDelete(p.id)} className="icon-button text-error"><Trash2 size={18}/></button>
                   </div>
                 </div>
-                <p className="text-muted mb-4">{p.description.split('|||')[0].trim()}</p>
+                <p className="text-muted mb-4">{(p.description || '').split('|||')[0].trim()}</p>
                 <div className="flex gap-2 items-center">
-                  {p.description.includes('|||') && <span className="home-promo-code inline-block" style={{background: 'rgba(255,107,0,0.1)', color: 'var(--primary)', border: '1px solid var(--primary)'}}>{p.description.split('|||')[1].trim()}</span>}
+                  {p.price && <span className="home-promo-code inline-block" style={{background: 'rgba(255,107,0,0.1)', color: 'var(--primary)', border: '1px solid var(--primary)'}}>{p.price}</span>}
+                  {!p.price && p.description && p.description.includes('|||') && <span className="home-promo-code inline-block" style={{background: 'rgba(255,107,0,0.1)', color: 'var(--primary)', border: '1px solid var(--primary)'}}>{p.description.split('|||')[1].trim()}</span>}
                   {p.code && <span className="home-promo-code inline-block">{p.code}</span>}
                 </div>
               </div>
@@ -473,36 +476,36 @@ function TicketGroup({ title, items, onSelect, defaultOpen = true, accent = '#10
 const STATUS_OPTIONS = ['Pending', 'Needs Authorization', 'Authorized', 'In Progress', 'Completed', 'Cancelled'];
 const PRIORITY_OPTIONS = ['Low', 'Normal', 'High', 'Urgent'];
 const EVENT_TYPES = [
-  'Note',
-  'Outcome',
-  'Recommendations',
-  'Credentials',
   'Account',
   'App',
-  'Content',
-  'Editing',
-  'Meeting',
-  'Troubleshooting',
-  'OS',
-  'Photography',
-  'Mobile Service',
-  'SIM/eSIM',
   'Backup/Restore',
-  'Configuration',
-  'Update',
-  'Research/Planning',
-  'Consult',
-  'Communication',
-  'Cost Savings',
-  'Status Change',
-  'Part Used',
-  'Issue Found',
-  'Resolution',
   'Client Authorization',
+  'Communication',
+  'Configuration',
+  'Consult',
+  'Content',
+  'Cost Savings',
+  'Credentials',
+  'Editing',
+  'Issue Found',
+  'Meeting',
+  'Mobile Service',
+  'Note',
+  'OS',
+  'Outcome',
+  'Part Used',
+  'Photography',
+  'Recommendations',
+  'Research/Planning',
+  'Resolution',
+  'SIM/eSIM',
+  'Status Change',
+  'Troubleshooting',
+  'Update',
   'Other',
 ];
 
-const EVENT_STATUSES = ['Successful', 'Unsuccessful', 'Pending', 'Delayed', 'Completed', 'None'];
+const EVENT_STATUSES = ['Successful', 'Unsuccessful', 'Incomplete', 'Pending', 'Delayed', 'Completed', 'None'];
 
 // ─── Summary Modal ─────────────────────────────────────────────────────────────────────────────
 
@@ -912,7 +915,7 @@ export default function TechDashboard() {
       const statusPrefix = eventStatus !== 'None' ? `[${eventStatus}] ` : '';
       const finalNote = `${summaryPrefix}${statusPrefix}${computedNote}`;
 
-      await insertTicketEvent(selectedTicket.id, eventType, finalNote);
+      await insertTicketEvent(selectedTicket.id, eventType, finalNote, eventStatus !== 'None' ? eventStatus : null);
 
       // Auto-sync to ticket credentials if Credential or Account was added
       if (newCredToSync) {
@@ -962,14 +965,17 @@ export default function TechDashboard() {
     setEditIncludeInSummary(hasSummary);
 
     // Extract status if present
-    const statusMatch = ev.note.match(/\[(Successful|Unsuccessful|Pending|Delayed|Completed)\]/);
-    setEditEventStatus(statusMatch ? statusMatch[1] : 'None');
-
-    // Clean note
-    const clean = ev.note
+    // Prefer DB status column; fall back to extracting from note text
+    if (ev.status && ev.status !== 'None') {
+      setEditEventStatus(ev.status);
+    } else {
+      const statusMatch = ev.note.match(/\[(Successful|Unsuccessful|Incomplete|Pending|Delayed|Completed)\]/);
+      setEditEventStatus(statusMatch ? statusMatch[1] : 'None');
+    }
       .replace(/\[Summary\]\s*/g, '')
-      .replace(/\[(Successful|Unsuccessful|Pending|Delayed|Completed)\]\s*/g, '');
-    setEditEventNote(clean);
+    const clean = ev.note
+    // Clean note
+      .replace(/\[(Successful|Unsuccessful|Incomplete|Pending|Delayed|Completed)\]\s*/g, '');
   };
 
   const handleEditEventSave = async (id) => {
@@ -1369,7 +1375,22 @@ export default function TechDashboard() {
                     <button type="button" onClick={() => setSelectedTicket(null)} className="button secondary small-btn">
                       ← Back
                     </button>
-                    <h2>Ticket {selectedTicket.displayId}: {selectedTicket.service}</h2>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '1.3rem', fontWeight: 800, color: 'var(--primary)', letterSpacing: '0.03em' }}>
+                          {selectedTicket.ticket_code || selectedTicket.displayId}
+                        </span>
+                        {selectedTicket.ticket_code && (
+                          <span className="text-muted" style={{ fontSize: '0.78rem' }}>({selectedTicket.displayId})</span>
+                        )}
+                      </div>
+                      <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{selectedTicket.service}</h2>
+                      {selectedTicket.raw?.converted_from_quote_id && (
+                        <span className="text-muted" style={{ fontSize: '0.75rem' }}>
+                          📋 Converted from Info Request
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex gap-2 flex-wrap items-center">
                     {/* Invoice + Summary buttons */}
@@ -2035,6 +2056,7 @@ export default function TechDashboard() {
                            <thead>
                              <tr>
                                <th style={{width: '130px'}}>Type</th>
+                               <th style={{width: '100px'}}>Status</th>
                                <th>Note / Entry</th>
                                <th style={{width: '140px'}}>Timestamp</th>
                                <th style={{width: '80px'}}>Actions</th>
@@ -2042,7 +2064,7 @@ export default function TechDashboard() {
                            </thead>
                            <tbody>
                              {events.length === 0 ? (
-                               <tr><td colSpan={4} className="text-muted text-center py-4">No progress entries yet.</td></tr>
+                               <tr><td colSpan={5} className="text-muted text-center py-4">No progress entries yet.</td></tr>
                              ) : (
                                events.map(ev => {
                                  const isEditing = editingEventId === ev.id;
@@ -2052,7 +2074,7 @@ export default function TechDashboard() {
                                  if (isEditing) {
                                    return (
                                      <tr key={ev.id} style={{ background: 'rgba(255,255,255,0.04)' }}>
-                                       <td colSpan={4} className="p-3">
+                                       <td colSpan={5} className="p-3">
                                          <form onSubmit={(e) => { e.preventDefault(); handleEditEventSave(ev.id); }} className="flex flex-col gap-2">
                                            <div className="flex flex-wrap items-center gap-2">
                                              <select
@@ -2111,6 +2133,13 @@ export default function TechDashboard() {
                                          {ev.event_type}
                                        </span>
                                      </td>
+                                      <td>
+                                        {ev.status && ev.status !== 'None' ? (
+                                          <span className={'status-badge event-status-' + (ev.status || '').toLowerCase()}>{ev.status}</span>
+                                        ) : (
+                                          <span className="text-muted" style={{fontSize:'0.7rem'}}>—</span>
+                                        )}
+                                      </td>
                                      <td>
                                        <div className="flex items-center gap-2 flex-wrap">
                                          <span>{cleanDisplayNote}</span>
@@ -2553,3 +2582,4 @@ export default function TechDashboard() {
     </div>
   );
 }
+
