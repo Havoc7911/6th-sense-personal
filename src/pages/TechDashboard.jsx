@@ -3,9 +3,11 @@ import {
   Search, Filter, AlertCircle, FileText, Smartphone, Shield, Database,
   Power, MessageSquare, ClipboardList, Plus, Clock, Paperclip, Download,
   ReceiptText, FileCheck, ChevronDown, ChevronUp, ChevronRight, Unlock, X, Tag, Megaphone,
-  Pencil, Trash2, ToggleLeft, ToggleRight, User, ArrowRight, Printer, Copy, Check, CreditCard
+  Pencil, Trash2, ToggleLeft, ToggleRight, User, ArrowRight, Printer, Copy, Check, CreditCard,
+  BadgePercent, TrendingUp
 } from 'lucide-react';
 import QuoteRequestsPanel from './QuoteRequestsPanel';
+import AuditProgramsConfig from '../components/CostSavingAudit/AuditProgramsConfig';
 import {
   fetchAllTickets,
   fetchMessages,
@@ -24,6 +26,7 @@ import {
   updateTicketInfo,
   generateInvoicePrint,
   generateServiceSummaryPrint,
+  generateCostSavingAuditPrint,
   fetchAllPromotions,
   insertPromotion,
   updatePromotion,
@@ -1275,6 +1278,10 @@ export default function TechDashboard() {
             onClick={() => { setActiveView('promotions'); setSelectedTicket(null); }}>
             <Megaphone size={18} /> Promotions
           </button>
+          <button type="button" className={`tech-nav-btn ${activeView === 'audit-programs' ? 'active' : ''}`}
+            onClick={() => { setActiveView('audit-programs'); setSelectedTicket(null); }}>
+            <BadgePercent size={18} /> Audit Programs
+          </button>
           <button type="button" className="tech-nav-btn" disabled>
             <Database size={18} /> Knowledge Base
           </button>
@@ -1286,6 +1293,8 @@ export default function TechDashboard() {
           <QuoteRequestsPanel />
         ) : activeView === 'promotions' ? (
           <PromotionsPanel />
+        ) : activeView === 'audit-programs' ? (
+          <AuditProgramsConfig />
         ) : (
           <>
             {loadError && <p style={{ color: '#fca5a5', marginBottom: '1rem' }}>{loadError}</p>}
@@ -1371,6 +1380,14 @@ export default function TechDashboard() {
                       title="Generate Invoice"
                     >
                       <ReceiptText size={16} /> Invoice
+                    </button>
+                    <button
+                      type="button"
+                      className={`button ${selectedTicket.service === 'cost-saving-audit' || selectedTicket.intake?.auditAnswers ? 'primary' : 'secondary'} small-btn flex items-center gap-2`}
+                      onClick={() => generateCostSavingAuditPrint(selectedTicket)}
+                      title="Generate Cost-Saving Audit Report"
+                    >
+                      <TrendingUp size={16} /> Audit Report
                     </button>
                     <button
                       type="button"
@@ -1757,7 +1774,16 @@ export default function TechDashboard() {
                           {/* Audit Details Card if present */}
                           {parsed.auditDetails && (
                             <div className="intake-device-card" style={{ borderColor: 'rgba(168, 85, 247, 0.3)', background: 'rgba(168, 85, 247, 0.05)' }}>
-                              <div className="intake-group-title" style={{ color: '#c084fc' }}>Cost-Saving Audit Questionnaire</div>
+                              <div className="flex justify-between items-center mb-2">
+                                <div className="intake-group-title" style={{ color: '#c084fc', margin: 0 }}>Cost-Saving Audit Questionnaire</div>
+                                <button
+                                  type="button"
+                                  className="button small-btn flex items-center gap-1 text-xs"
+                                  onClick={() => generateCostSavingAuditPrint(selectedTicket)}
+                                >
+                                  <TrendingUp size={13} /> Print Audit Report
+                                </button>
+                              </div>
                               <div className="text-xs leading-relaxed text-gray-300 font-mono whitespace-pre-wrap">{parsed.auditDetails}</div>
                             </div>
                           )}

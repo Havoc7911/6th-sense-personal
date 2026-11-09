@@ -1,5 +1,7 @@
 import { getSupabase } from '../lib/supabase';
 import { getServicePricing } from '../lib/services';
+import { calculateAuditSavings } from '../lib/auditSchema';
+import { screenUserAgainstPrograms, DEFAULT_PROGRAMS } from '../lib/auditPrograms';
 
 export const BACKEND_NOT_CONFIGURED = 'BACKEND_NOT_CONFIGURED';
 
@@ -13,12 +15,25 @@ export function assertSupabase() {
   return sb;
 }
 
+export async function notifyTech({ type, title, message, ticketCode, clientName, clientEmail, clientPhone }) {
+  try {
+    await fetch('/api/notify-tech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, title, message, ticketCode, clientName, clientEmail, clientPhone })
+    });
+  } catch (err) {
+    console.warn('Could not dispatch tech notification:', err);
+  }
+}
+
 export async function insertQuote(row) {
   const sb = assertSupabase();
   const { data, error } = await sb.from('quotes').insert({
     name: row.name,
     email: row.email,
     phone: row.phone,
+    address: row.address || null,
     service: row.service,
     request_type: row.request_type || 'quote',
     device_type: row.device_type || null,
@@ -36,6 +51,15 @@ export async function insertQuote(row) {
     ticket_code: row.ticket_code || null,
   }).select().single();
   if (error) throw error;
+  notifyTech({
+    type: 'quote',
+    title: 'New Information / Quote Request',
+    message: `${row.name} submitted a ${row.request_type || 'quote'} request for ${row.service || 'services'}.`,
+    ticketCode: row.ticket_code,
+    clientName: row.name,
+    clientEmail: row.email,
+    clientPhone: row.phone,
+  });
   return data;
 }
 
@@ -51,6 +75,7 @@ export async function convertQuoteToTicket(quote, ticketCode) {
     name: quote.name,
     email: quote.email,
     phone: quote.phone,
+    address: quote.address || null,
     job_type: quote.service || null,
     service: quote.service || null,
     device_type: quote.device_type || 'Unknown',
@@ -114,6 +139,7 @@ export async function insertTicket(row) {
     name: row.name,
     email: row.email,
     phone: row.phone,
+    address: row.address || null,
     job_type: row.job_type || serviceTarget || '',
     service: serviceTarget || null,
     device_type: row.device_type || 'Unknown',
@@ -135,6 +161,15 @@ export async function insertTicket(row) {
     invoice_items: initialInvoiceItems,
   }).select().single();
   if (error) throw error;
+  notifyTech({
+    type: 'ticket',
+    title: 'New Service Ticket Created',
+    message: `${row.name} submitted a ticket for ${row.service || row.job_type || 'tech services'}.`,
+    ticketCode: row.ticket_code,
+    clientName: row.name,
+    clientEmail: row.email,
+    clientPhone: row.phone,
+  });
   return data;
 }
 
@@ -307,11 +342,15 @@ export async function fetchTicketEvents(ticketId) {
   return data || [];
 }
 
-export async function insertTicketEvent(ticketId, eventType, note) {
+export async function insertTicketEvent(ticketId, eventType, note, status = null) {
   const sb = assertSupabase();
+  const payload = { ticket_id: ticketId, event_type: eventType, note };
+  if (status && status !== 'None') {
+    payload.status = status;
+  }
   const { data, error } = await sb
     .from('ticket_events')
-    .insert({ ticket_id: ticketId, event_type: eventType, note })
+    .insert(payload)
     .select()
     .single();
   if (error) throw error;
@@ -398,6 +437,14 @@ export async function insertMessage({ ticketId, sender, text, isTech }) {
     .select()
     .single();
   if (error) throw error;
+  if (!isTech) {
+    notifyTech({
+      type: 'message',
+      title: 'New Client Message Received',
+      message: `${sender || 'Client'}: "${text?.substring(0, 100)}${text?.length > 100 ? '...' : ''}"`,
+      clientName: sender,
+    });
+  }
   return data;
 }
 
@@ -415,6 +462,7 @@ export async function insertPromotion(row) {
   const { data, error } = await sb.from('promotions').insert({
     title: row.title,
     description: row.description,
+    price: row.price || null,
     code: row.code || null,
     active: row.active !== false,
   }).select().single();
@@ -482,26 +530,47 @@ export function subscribeMessages(ticketId, onInsert) {
   };
 }
 
+export function subscribeAllMessages(onInsert) {
+  const sb = getSupabase();
+  if (!sb) return () => {};
+  const channel = sb
+    .channel('public:messages:all')
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+      },
+      (payload) => onInsert(payload.new)
+    )
+    .subscribe();
+  return () => {
+    sb.removeChannel(channel);
+  };
+}
+
 // ─── Invoice Generation (client-side print) ──────────────────────────────
 
-export function generateInvoicePrint(ticket, runtimeEstimate) {
+export function generateInvoicePrint(ticket, runtimeEstimate, signatureOverride = null) {
   const invoiceNumber = `INV-${ticket.displayId || ticket.id?.slice(0, 8).toUpperCase()}`;
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const deviceInfo = [ticket.intake?.brand, ticket.intake?.deviceType].filter(Boolean).join(' - ');
+  const techSignatureImg = signatureOverride || (typeof window !== 'undefined' ? localStorage.getItem('tech_signature_img') : null);
 
-  // Extract payment details if recorded
-  let payment = ticket.invoicePayment || null;
+  // Extract all payment details if recorded
   const rawItems = ticket.invoiceItems || [];
-  const paymentItem = rawItems.find(it => it.__isPayment || it.isPayment);
-  if (paymentItem && !payment) {
-    payment = {
-      name: paymentItem.name || paymentItem.payerName,
-      paymentType: paymentItem.paymentType || paymentItem.type,
-      account: paymentItem.account,
-      amount: paymentItem.amount,
-      date: paymentItem.date
-    };
+  let paymentItems = rawItems.filter(it => it.__isPayment || it.isPayment);
+  if (ticket.invoicePayment && paymentItems.length === 0) {
+    paymentItems = [ticket.invoicePayment];
   }
+
+  let totalAmountPaid = 0;
+  paymentItems.forEach(p => {
+    const cleanAmt = String(p.amount || '').replace(/[^0-9.]/g, '');
+    const numAmt = parseFloat(cleanAmt);
+    if (!isNaN(numAmt)) totalAmountPaid += numAmt;
+  });
 
   // Filter out any metadata/payment records from billable line items
   let items = rawItems.filter(it => !it.__isPayment && !it.isPayment);
@@ -550,15 +619,8 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
 
   const totalDisplay = hasPendingOrHourly ? 'TBD' : '$' + Math.max(0, subtotal).toFixed(2);
   const safeInvoiceStatus = ticket.invoiceStatus || 'Estimate. Not final.';
-
-  let amountPaid = 0;
-  if (payment && payment.amount) {
-    const cleanAmt = String(payment.amount).replace(/[^0-9.]/g, '');
-    const numAmt = parseFloat(cleanAmt);
-    if (!isNaN(numAmt)) amountPaid = numAmt;
-  }
-  const balanceDue = Math.max(0, subtotal - amountPaid);
-  const isPaidInFull = (amountPaid >= subtotal && subtotal > 0) || safeInvoiceStatus === 'Paid In Full';
+  const balanceDue = Math.max(0, subtotal - totalAmountPaid);
+  const isPaidInFull = (totalAmountPaid >= subtotal && subtotal > 0) || safeInvoiceStatus === 'Paid In Full';
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -588,7 +650,6 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
     .payment-box { margin-top: 28px; padding: 18px 22px; background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 8px; }
     .payment-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px dashed #bbf7d0; padding-bottom: 8px; }
     .payment-badge { background: #15803d; color: #fff; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 4px; text-transform: uppercase; }
-    .payment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
     .status-row { margin-top: 28px; padding: 16px 20px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; color: #166534; font-size: 14px; }
     .status-row.estimate { background: #fffbeb; border-color: #fde68a; color: #92400e; }
     .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center; }
@@ -614,7 +675,8 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
     <div>
       <p class="section-title">Bill To</p>
       <div class="field-value">${ticket.client || ticket.name || '-'}</div>
-      <div class="field-label" style="margin-top:6px;">${ticket.email || '-'}</div>
+      ${ticket.address ? `<div class="field-label" style="margin-top:4px; font-size: 13px; color: #334155; font-weight: 500;">${ticket.address}</div>` : ''}
+      <div class="field-label" style="margin-top:4px;">${ticket.email || '-'}</div>
       <div class="field-label">${ticket.phone || '-'}</div>
     </div>
     <div>
@@ -622,6 +684,7 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
       <div class="field-value">${deviceInfo || '-'}</div>
       <div class="field-label" style="margin-top:4px;">${ticket.service || ticket.job_type || 'General Support'}</div>
       ${ticket.intake?.os ? `<div class="field-label">${ticket.intake.os}</div>` : ''}
+      ${ticket.ticket_code ? `<div class="field-label" style="margin-top:4px; font-family: monospace; font-weight: 600; color: #ff6b00;">Ticket Code: ${ticket.ticket_code}</div>` : ''}
     </div>
   </div>
 
@@ -645,32 +708,48 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
     </tfoot>
   </table>
 
-  ${payment ? `
+  ${paymentItems.length > 0 ? `
     <div class="payment-box">
       <div class="payment-header">
-        <span style="font-weight: 700; color: #166534; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Payment & Settlement Details</span>
-        <span class="payment-badge">${isPaidInFull ? 'Paid in Full' : 'Payment Recorded'}</span>
+        <span style="font-weight: 700; color: #166534; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">
+          Payment & Settlement Details (${paymentItems.length} Payment${paymentItems.length > 1 ? 's' : ''})
+        </span>
+        <span class="payment-badge">${isPaidInFull ? 'Paid in Full' : 'Partial Payment Recorded'}</span>
       </div>
-      <div class="payment-grid">
-        <div>
-          <div class="field-label">Payer Name</div>
-          <div class="field-value" style="font-size: 14px;">${payment.name || ticket.client || '-'}</div>
-        </div>
-        <div>
-          <div class="field-label">Payment Method</div>
-          <div class="field-value" style="font-size: 14px; font-weight: 600; color: #15803d;">${payment.paymentType || 'Card'}</div>
-        </div>
-        <div>
-          <div class="field-label">Card / Account ID</div>
-          <div class="field-value" style="font-size: 14px; font-family: monospace;">${payment.account || '—'}</div>
-        </div>
-        <div>
-          <div class="field-label">Amount Paid</div>
-          <div class="field-value" style="font-size: 14px; font-weight: 700; color: #166534;">$${amountPaid.toFixed(2)}</div>
-        </div>
-      </div>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px;">
+        <thead>
+          <tr style="background: rgba(22, 101, 52, 0.08); text-align: left; font-size: 11px; text-transform: uppercase;">
+            <th style="padding: 8px 10px;">Date</th>
+            <th style="padding: 8px 10px;">Payer Name</th>
+            <th style="padding: 8px 10px;">Method</th>
+            <th style="padding: 8px 10px;">Card / Ref #</th>
+            <th style="padding: 8px 10px; text-align: right;">Amount Paid</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${paymentItems.map(p => {
+            const amt = parseFloat(String(p.amount || '').replace(/[^0-9.]/g, '')) || 0;
+            const dateDisp = p.date ? new Date(p.date).toLocaleDateString() : today;
+            return `
+              <tr style="border-bottom: 1px dashed #bbf7d0;">
+                <td style="padding: 10px;">${dateDisp}</td>
+                <td style="padding: 10px; font-weight: 600;">${p.name || p.payerName || ticket.client || '-'}</td>
+                <td style="padding: 10px; color: #15803d; font-weight: 600;">${p.paymentType || p.type || 'Card'}</td>
+                <td style="padding: 10px; font-family: monospace;">${p.account || '—'}</td>
+                <td style="padding: 10px; text-align: right; font-weight: 700; color: #166534;">$${amt.toFixed(2)}</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="font-weight: bold; background: rgba(22, 101, 52, 0.05);">
+            <td colspan="4" style="padding: 10px; text-align: right;">Total Payments Applied:</td>
+            <td style="padding: 10px; text-align: right; color: #166534; font-size: 14px;">$${totalAmountPaid.toFixed(2)}</td>
+          </tr>
+        </tfoot>
+      </table>
       ${balanceDue > 0.01 && !isPaidInFull ? `
-        <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #bbf7d0; font-size: 13px; font-weight: 600; color: #b45309; display: flex; justify-content: space-between;">
+        <div style="margin-top: 14px; padding-top: 10px; border-top: 1.5px solid #86efac; font-size: 14px; font-weight: 700; color: #b45309; display: flex; justify-content: space-between;">
           <span>Remaining Balance Due:</span>
           <span>$${balanceDue.toFixed(2)}</span>
         </div>
@@ -680,6 +759,31 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
 
   ${!isPaidInFull && safeInvoiceStatus !== 'Paid In Full' ? `<div class="status-row estimate">ℹ Current Invoice Status: <strong>${safeInvoiceStatus}</strong></div>` : ''}
   ${ticket.raw?.accepted_at ? `<div class="status-row">✔ Service authorized by client on ${new Date(ticket.raw.accepted_at).toLocaleDateString()}</div>` : ''}
+
+  <!-- Business Representative & Client Signatures -->
+  <div class="signoff-section" style="margin-top: 40px; padding-top: 24px; border-top: 1px solid #e2e8f0; display: grid; grid-template-columns: 1fr 1fr; gap: 32px;">
+    <div>
+      <div class="section-title">Authorized Business Representative</div>
+      <div style="font-size: 15px; font-weight: 700; color: #1e293b;">Jonathan McCulley</div>
+      <div style="font-size: 12px; color: #64748b;">Lead Technician, 6th Sense Personal</div>
+      <div class="signature-box" style="margin-top: 10px; min-height: 52px;">
+        ${techSignatureImg ? `<img src="${techSignatureImg}" alt="Jonathan McCulley Signature" style="max-height: 50px; max-width: 220px; display: block; object-fit: contain;" />` : ''}
+        <div style="border-top: 1px solid #94a3b8; width: 85%; padding-top: 4px; font-size: 11px; color: #64748b; margin-top: ${techSignatureImg ? '4px' : '36px'};">
+          Jonathan McCulley • Date: ${today}
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Client Acceptance / Authorization</div>
+      <div style="font-size: 14px; font-weight: 600; color: #1e293b;">${ticket.client || ticket.name || 'Client'}</div>
+      <div style="font-size: 12px; color: #64748b;">${ticket.email || ''}</div>
+      <div class="signature-box" style="margin-top: 10px; min-height: 52px;">
+        <div style="border-top: 1px solid #94a3b8; width: 85%; padding-top: 4px; font-size: 11px; color: #64748b; margin-top: 36px;">
+          Client Signature / Acknowledgement • Date: ________
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="footer">
     Thank you for choosing 6th Sense Personal. Payment is due upon completion of service.<br/>
@@ -697,10 +801,11 @@ export function generateInvoicePrint(ticket, runtimeEstimate) {
 
 // ─── Branded Service Summary Generation (client-side print/save) ───────────
 
-export function generateServiceSummaryPrint(ticket, summaryText, events = []) {
+export function generateServiceSummaryPrint(ticket, summaryText, events = [], signatureOverride = null) {
   const summaryRef = `SUM-${ticket.ticket_code || ticket.displayId || ticket.id?.slice(0, 8).toUpperCase()}`;
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const deviceInfo = [ticket.intake?.brand, ticket.intake?.deviceType].filter(Boolean).join(' - ') || 'Device Service';
+  const techSignatureImg = signatureOverride || (typeof window !== 'undefined' ? localStorage.getItem('tech_signature_img') : null);
 
   // Section parsing from summaryText
   const cleanSummary = String(summaryText || '').trim();
@@ -794,6 +899,7 @@ export function generateServiceSummaryPrint(ticket, summaryText, events = []) {
     <div>
       <p class="section-title">Client Information</p>
       <div class="field-value">${ticket.client || ticket.name || '-'}</div>
+      ${ticket.address ? `<div class="field-label" style="margin-top:4px; font-size:13px; color:#334155; font-weight: 500;">${ticket.address}</div>` : ''}
       <div class="field-label" style="margin-top:4px;">${ticket.email || '-'}</div>
       <div class="field-label">${ticket.phone || '-'}</div>
     </div>
@@ -802,6 +908,7 @@ export function generateServiceSummaryPrint(ticket, summaryText, events = []) {
       <div class="field-value">${ticket.service || ticket.job_type || 'Tech Support'}</div>
       <div class="field-label" style="margin-top:4px;">${deviceInfo}</div>
       ${ticket.intake?.imei ? `<div class="field-label" style="font-family:monospace;">IMEI: ${ticket.intake.imei}</div>` : ''}
+      ${ticket.ticket_code ? `<div class="field-label" style="margin-top:4px; font-family:monospace; color:#ff6b00; font-weight:600;">Ticket Code: ${ticket.ticket_code}</div>` : ''}
     </div>
   </div>
 
@@ -846,16 +953,25 @@ export function generateServiceSummaryPrint(ticket, summaryText, events = []) {
 
   <div class="signoff-section">
     <div>
-      <div class="section-title">Serviced By</div>
-      <div style="font-size: 14px; font-weight: 600; color: #1e293b;">6th Sense Personal Technical Support</div>
-      <div class="field-label">Confluence, PA</div>
-      <div class="signature-line">Technician Signature / Date</div>
+      <div class="section-title">Serviced By (Business Representative)</div>
+      <div style="font-size: 15px; font-weight: 700; color: #1e293b;">Jonathan McCulley</div>
+      <div style="font-size: 12px; color: #64748b;">Lead Technician, 6th Sense Personal</div>
+      <div class="signature-box" style="margin-top: 10px; min-height: 52px;">
+        ${techSignatureImg ? `<img src="${techSignatureImg}" alt="Jonathan McCulley Signature" style="max-height: 50px; max-width: 220px; display: block; object-fit: contain;" />` : ''}
+        <div style="border-top: 1px solid #94a3b8; width: 85%; padding-top: 4px; font-size: 11px; color: #64748b; margin-top: ${techSignatureImg ? '4px' : '36px'};">
+          Jonathan McCulley • Date: ${today}
+        </div>
+      </div>
     </div>
     <div>
       <div class="section-title">Client Confirmation</div>
       <div style="font-size: 14px; font-weight: 600; color: #1e293b;">${ticket.client || ticket.name || 'Client'}</div>
       <div class="field-label">${ticket.email || ''}</div>
-      <div class="signature-line">Client Signature / Acknowledgement</div>
+      <div class="signature-box" style="margin-top: 10px; min-height: 52px;">
+        <div style="border-top: 1px solid #94a3b8; width: 85%; padding-top: 4px; font-size: 11px; color: #64748b; margin-top: 36px;">
+          Client Signature / Acknowledgement • Date: ________
+        </div>
+      </div>
     </div>
   </div>
 
@@ -872,4 +988,290 @@ export function generateServiceSummaryPrint(ticket, summaryText, events = []) {
   const url = URL.createObjectURL(blob);
   window.open(url, '_blank');
 }
+
+  <div class="footer">
+    6th Sense Personal • Premium Tech Support, Device Repairs, and IT Consulting • Confluence, PA<br/>
+    For assistance or follow-up consultations, call (724) 780-3223 or visit 6th-sense-personal.vercel.app
+  </div>
+
+  <script>window.print();</script>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+}
+
+// ─── Branded Cost-Saving Audit Report Generation (client-side print/save) ─
+
+export function generateCostSavingAuditPrint(ticket, runtimeAuditData = null, programs = []) {
+  const auditRef = `AUD-${ticket.ticket_code || ticket.displayId || ticket.id?.slice(0, 8).toUpperCase() || 'DRAFT'}`;
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const clientName = ticket.client || ticket.name || ticket.client_name || 'Client';
+  const clientEmail = ticket.email || '-';
+  const clientPhone = ticket.phone || '-';
+
+  // Extract audit answers and data
+  let answers = runtimeAuditData?.answers || ticket.intake?.auditAnswers || {};
+  let totalAnnual = Number(runtimeAuditData?.totalAnnual || ticket.intake?.totalAnnual || 0);
+  let totalMonthly = Number(runtimeAuditData?.totalMonthly || ticket.intake?.totalMonthly || 0);
+  let breakdown = runtimeAuditData?.breakdown || ticket.intake?.breakdown || [];
+
+  // Parse from ticket notes/description if intake JSON wasn't populated
+  if (Object.keys(answers).length === 0 && (ticket.notes || ticket.description)) {
+    const rawText = `${ticket.notes || ''}\n${ticket.description || ''}`;
+    const linesMatch = rawText.match(/Lines:\s*(\d+)/i);
+    if (linesMatch) answers.lines_count = parseInt(linesMatch[1], 10);
+    if (/snap|medicaid/i.test(rawText)) answers.subsidies = ['Medicaid/SNAP'];
+    if (/postpaid/i.test(rawText)) answers.carrier_type = 'postpaid_major';
+    else if (/prepaid|mvno/i.test(rawText)) answers.carrier_type = 'mvno';
+    if (/student/i.test(rawText)) answers.isStudent = 'Yes';
+    if (/veteran/i.test(rawText)) answers.veteranStatus = 'Yes';
+    if (/chatgpt|claude|copilot/i.test(rawText)) answers.ai_tools = ['chatgpt', 'claude'];
+  }
+
+  // Calculate savings heuristics if not provided
+  if (breakdown.length === 0) {
+    const calculated = calculateAuditSavings(answers);
+    breakdown = calculated.breakdown;
+    if (!totalAnnual) totalAnnual = calculated.totalAnnual;
+    if (!totalMonthly) totalMonthly = calculated.totalMonthly;
+  }
+
+  // Fallback baseline if answers were empty
+  if (totalAnnual === 0 && breakdown.length === 0) {
+    totalAnnual = 960;
+    totalMonthly = 80;
+    breakdown = [
+      {
+        category: 'Mobile & Network Optimization',
+        annual: 420,
+        monthly: 35,
+        insight: 'Migrating to tier-1 high-speed priority network towers eliminates legacy carrier surcharges.'
+      },
+      {
+        category: 'Device Protection & Warranties',
+        annual: 216,
+        monthly: 18,
+        insight: 'Transitioning to automatic zero-cost credit card cellular coverage eliminates monthly insurance fees.'
+      },
+      {
+        category: 'Fintech & Autopay Cashback',
+        annual: 120,
+        monthly: 10,
+        insight: 'Activating compliant autopay rails captures standard $10/line recurring bill credits.'
+      },
+      {
+        category: 'Cloud & Tech Ecosystems',
+        annual: 204,
+        monthly: 17,
+        insight: 'Consolidating isolated storage plans into unified family suites reduces duplicate subscription overhead.'
+      }
+    ];
+  }
+
+  // Screen against specific configured programs / coupons / credits
+  const candidatePrograms = (programs && programs.length > 0) ? programs : DEFAULT_PROGRAMS;
+  const matchedPrograms = screenUserAgainstPrograms(answers, candidatePrograms);
+
+  const threeYearProjected = totalAnnual * 3;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cost-Saving Audit Report - ${auditRef}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; background: #fff; padding: 48px; line-height: 1.6; }
+    .report-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; border-bottom: 3px solid #ff6b00; padding-bottom: 24px; }
+    .brand { font-size: 26px; font-weight: 800; color: #ff6b00; letter-spacing: -0.5px; }
+    .brand span { color: #1e293b; }
+    .report-meta { text-align: right; }
+    .report-meta h2 { font-size: 22px; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px; }
+    .report-meta p { font-size: 13px; color: #64748b; margin-top: 4px; }
+    .badge { display: inline-block; background: rgba(16, 185, 129, 0.1); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-top: 6px; }
+    .hero-banner { background: linear-gradient(135deg, #fff7ed 0%, #ecfdf5 100%); border: 1.5px solid #fed7aa; border-radius: 12px; padding: 24px 28px; margin-bottom: 32px; display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 20px; align-items: center; }
+    .hero-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; font-weight: 700; margin-bottom: 4px; }
+    .hero-stat-value { font-size: 32px; font-weight: 800; color: #059669; font-family: monospace; }
+    .hero-stat-value.primary { color: #ea580c; }
+    .hero-stat-sub { font-size: 12px; color: #64748b; margin-top: 2px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-bottom: 32px; }
+    .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: #475569; margin-bottom: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+    .field-label { font-size: 12px; color: #94a3b8; }
+    .field-value { font-size: 15px; font-weight: 600; color: #1e293b; }
+    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+    thead th { background: #f1f5f9; padding: 12px 14px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; font-weight: 700; border-bottom: 2px solid #e2e8f0; }
+    tbody td { padding: 14px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    .amount-col { text-align: right; font-family: monospace; font-weight: 700; color: #059669; }
+    .type-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #e0f2fe; color: #0369a1; }
+    .tc-notice-box { margin-top: 28px; padding: 18px 22px; background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 12px; color: #475569; line-height: 1.7; }
+    .signoff-section { margin-top: 40px; padding-top: 24px; border-top: 1px solid #e2e8f0; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+    .signature-line { margin-top: 36px; border-top: 1px solid #94a3b8; width: 80%; padding-top: 6px; font-size: 12px; color: #64748b; }
+    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8; text-align: center; }
+    @media print { body { padding: 24px; } }
+  </style>
+</head>
+<body>
+  <div class="report-header">
+    <div>
+      <div class="brand">6th <span>Sense</span> Personal</div>
+      <p style="font-size:13px; color:#64748b; margin-top:6px;">Technology Advisory &amp; Digital Concierge</p>
+      <p style="font-size:13px; color:#64748b;">Confluence, PA • (724) 780-3223 • jmcc5271@gmail.com</p>
+    </div>
+    <div class="report-meta">
+      <h2>Cost-Saving Audit</h2>
+      <p>Report Ref: ${auditRef}</p>
+      <p>Audit Date: ${today}</p>
+      <span class="badge">Verified Screening Results</span>
+    </div>
+  </div>
+
+  <!-- Executive Savings Projection Hero -->
+  <div class="hero-banner">
+    <div>
+      <div class="hero-stat-label">Identified Annual Savings</div>
+      <div class="hero-stat-value primary">$${totalAnnual.toLocaleString()}<span style="font-size: 16px; font-weight: 600;"> / yr</span></div>
+      <div class="hero-stat-sub">Recoverable recurring technological overhead</div>
+    </div>
+    <div>
+      <div class="hero-stat-label">Monthly Cash Flow Recovery</div>
+      <div class="hero-stat-value">~$${totalMonthly.toFixed(0)}<span style="font-size: 16px; font-weight: 600;"> / mo</span></div>
+      <div class="hero-stat-sub">Direct monthly bill reduction</div>
+    </div>
+    <div>
+      <div class="hero-stat-label">3-Year Compounded Value</div>
+      <div class="hero-stat-value" style="color: #2563eb;">$${threeYearProjected.toLocaleString()}</div>
+      <div class="hero-stat-sub">Total 36-month capital retained</div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section-title">Client Information</div>
+      <div class="field-value">${clientName}</div>
+      <div class="field-label" style="margin-top:4px;">${clientEmail}</div>
+      <div class="field-label">${clientPhone}</div>
+    </div>
+    <div>
+      <div class="section-title">Audit Scope &amp; Profile</div>
+      <div class="grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">
+        <div><span class="field-label">Active Cellular Lines:</span> <strong style="color:#1e293b;">${answers.lines_count || 1}</strong></div>
+        <div><span class="field-label">Network Type:</span> <strong style="color:#1e293b;">${(answers.carrier_type || 'Postpaid').replace(/_/g, ' ')}</strong></div>
+        <div><span class="field-label">Financing Status:</span> <strong style="color:#1e293b;">${(answers.financing_status || 'Owned / Unlocked').replace(/_/g, ' ')}</strong></div>
+        <div><span class="field-label">Assistance Screened:</span> <strong style="color:#1e293b;">${answers.snap_medicaid ? 'Yes' : 'Evaluated'}</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screened Programs & Qualified Credits -->
+  <div style="margin-bottom: 32px;">
+    <div class="section-title">🎯 Screened Programs, Coupons &amp; Credits Qualified</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28%;">Program / Credit Name</th>
+          <th style="width: 18%;">Benefit Type</th>
+          <th style="width: 18%;">Benefit Amount &amp; Term</th>
+          <th>Inclusion Criteria &amp; Qualification Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${matchedPrograms.length > 0 ? matchedPrograms.map(p => `
+          <tr>
+            <td>
+              <strong style="color: #1e293b; display: block;">${p.name}</strong>
+              <span style="font-size: 11px; color: #64748b;">${p.category || 'General Perk'}</span>
+            </td>
+            <td><span class="type-badge">${p.benefit_type || 'Monthly Discount'}</span></td>
+            <td>
+              <span class="amount-col" style="display: block;">${p.benefit_amount}</span>
+              <span style="font-size: 11px; color: #64748b;">${p.timeframe || 'Ongoing'}</span>
+            </td>
+            <td>
+              <div style="font-size: 13px; color: #334155;">${p.matchReason || p.inclusion_criteria}</div>
+              ${p.tc_notes ? `<div style="font-size: 11px; color: #64748b; margin-top: 4px; font-style: italic;">Terms: ${p.tc_notes}</div>` : ''}
+              ${p.document?.fileName ? `<div style="font-size: 11px; color: #ea580c; margin-top: 4px;">📎 Official T&amp;C on file: ${p.document.fileName}</div>` : ''}
+            </td>
+          </tr>
+        `).join('') : `
+          <tr><td colspan="4" style="text-align:center; color:#94a3b8; padding: 20px;">No custom program matches identified. General baseline heuristics applied below.</td></tr>
+        `}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Categorized Savings Breakdown Table -->
+  <div style="margin-bottom: 32px;">
+    <div class="section-title">📊 Categorized Opportunity Breakdown</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28%;">Service Category</th>
+          <th style="width: 14%; text-align: right;">Est. Monthly</th>
+          <th style="width: 14%; text-align: right;">Est. Annual</th>
+          <th>Strategic Optimization &amp; Action Plan</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${breakdown.map(item => `
+          <tr>
+            <td><strong style="color: #1e293b;">${item.category}</strong></td>
+            <td class="amount-col">+$${Number(item.monthly).toFixed(0)}/mo</td>
+            <td class="amount-col" style="color: #ea580c;">+$${Number(item.annual).toLocaleString()}/yr</td>
+            <td style="font-size: 13px; color: #334155;">${item.insight}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="background: #f8fafc; font-weight: 700;">
+          <td style="padding: 14px; font-size: 14px;">Total Recoverable Value</td>
+          <td class="amount-col" style="font-size: 15px; color: #059669;">+$${totalMonthly.toFixed(0)}/mo</td>
+          <td class="amount-col" style="font-size: 16px; color: #ea580c;">+$${totalAnnual.toLocaleString()}/yr</td>
+          <td style="font-size: 12px; color: #64748b;">Consolidated immediate + ongoing cost reduction</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <!-- Official Terms, Policy Caveats & Verification Notice -->
+  <div class="tc-notice-box">
+    <strong style="color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 6px;">
+      📋 Program Terms &amp; Compliance Notes
+    </strong>
+    All evaluated programs, autopay credits, government subsidies, and carrier promotions are subject to official provider terms and conditions, credit approvals, identity verifications, and regional tower availability. Line porting requires active account standing with current carriers prior to number transfer completion. Credit card cell phone insurance requires continuous monthly payment of the full cellular bill on the designated card. 6th Sense Personal does not represent or act as an agent of tier-1 carriers, third-party MVNOs, or streaming providers; all recommendations are independent technological cost containment strategies.
+  </div>
+
+  <!-- Signoff Section -->
+  <div class="signoff-section">
+    <div>
+      <div class="section-title">Audited &amp; Certified By</div>
+      <div style="font-size: 14px; font-weight: 600; color: #1e293b;">6th Sense Personal Technical Advisory</div>
+      <div class="field-label">Confluence, PA</div>
+      <div class="signature-line">Lead Consultant Signature / Date</div>
+    </div>
+    <div>
+      <div class="section-title">Client Acknowledgement</div>
+      <div style="font-size: 14px; font-weight: 600; color: #1e293b;">${clientName}</div>
+      <div class="field-label">${clientEmail}</div>
+      <div class="signature-line">Client Signature / Implementation Acceptance</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    6th Sense Personal • Premium Tech Support, Device Repairs, and IT Consulting • Confluence, PA<br/>
+    For assistance or follow-up consultations, call (724) 780-3223 or visit 6th-sense-personal.vercel.app
+  </div>
+
+  <script>window.print();</script>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+}
+
 

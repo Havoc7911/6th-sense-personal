@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { MessageSquare, FileText, CheckCircle, Clock, ThumbsUp, FileCheck, Search, ClipboardList, ReceiptText, Download, Smartphone, Bell, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { MessageSquare, FileText, CheckCircle, Clock, ThumbsUp, FileCheck, Search, ClipboardList, ReceiptText, Download, Smartphone, Bell, AlertCircle, ChevronDown, ChevronUp, TrendingUp } from 'lucide-react';
 import {
   fetchTicketsByEmail,
   fetchQuotesByEmail,
@@ -15,6 +15,7 @@ import {
   convertQuoteToTicket,
   lookupByCode,
   generateInvoicePrint,
+  generateCostSavingAuditPrint,
 } from '../api/data';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatTicketId } from '../lib/ticketId';
@@ -752,8 +753,17 @@ export default function ClientDashboard() {
                       )}
                       
                       <button className="button w-full flex items-center justify-center gap-2 py-3" onClick={() => generateInvoicePrint({ ...ticket, invoiceStatus: ticket.invoice_status, invoiceItems: ticket.invoice_items })}>
-                        <Download size={18}/> Print / Save PDF
+                        <Download size={18}/> Print / Save Invoice
                       </button>
+
+                      {(ticket.service === 'cost-saving-audit' || ticket.job_type === 'cost-saving-audit' || ticket.intake?.auditAnswers || ticket.intake?.breakdown) && (
+                        <button 
+                          className="button secondary w-full flex items-center justify-center gap-2 py-3 mt-3" 
+                          onClick={() => generateCostSavingAuditPrint(ticket)}
+                        >
+                          <TrendingUp size={18} className="text-primary"/> Print / Save Audit Report
+                        </button>
+                      )}
                     </div>
                     
                     {['Estimated', 'Needs Authorization'].includes(ticket.status) && !ticket.accepted_at && (

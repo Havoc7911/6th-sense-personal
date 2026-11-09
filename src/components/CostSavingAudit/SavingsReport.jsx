@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   ArrowRight, 
@@ -11,10 +11,13 @@ import {
   FileText, 
   Calendar,
   ExternalLink,
-  Sparkles
+  Sparkles,
+  Printer,
+  TrendingUp
 } from 'lucide-react';
 import { calculateAuditSavings } from '../../lib/auditSchema';
-import { insertQuote } from '../../api/data';
+import { insertQuote, generateCostSavingAuditPrint } from '../../api/data';
+import { fetchAuditPrograms } from '../../lib/auditPrograms';
 import { generateTicketCode } from '../../lib/ticketCode';
 import { getSupabase } from '../../lib/supabase';
 import EmbeddedScheduler from './EmbeddedScheduler';
@@ -22,12 +25,35 @@ import './AuditWizard.css';
 
 export default function SavingsReport({ answers, onActionRequested }) {
   const { breakdown, totalMonthly, totalAnnual } = calculateAuditSavings(answers);
+  const [auditPrograms, setAuditPrograms] = useState([]);
   const [leadForm, setLeadForm] = useState({ name: '', email: '', phone: '' });
   const [submitting, setSubmitting] = useState(false);
   const [submittedTicket, setSubmittedTicket] = useState(null);
   const [error, setError] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
+
+  useEffect(() => {
+    fetchAuditPrograms().then(setAuditPrograms).catch(() => {});
+  }, []);
+
+  const handlePrintAuditReport = (ticketCode = null) => {
+    const reportTicket = {
+      ticket_code: ticketCode || submittedTicket || 'PREVIEW',
+      name: leadForm.name || 'Valued Client',
+      client: leadForm.name || 'Valued Client',
+      email: leadForm.email || 'Client Email',
+      phone: leadForm.phone || '',
+      service: 'cost-saving-audit',
+      intake: {
+        auditAnswers: answers,
+        breakdown,
+        totalAnnual,
+        totalMonthly
+      }
+    };
+    generateCostSavingAuditPrint(reportTicket, { answers, breakdown, totalAnnual, totalMonthly }, auditPrograms);
+  };
 
   const handleCopyTicket = (code) => {
     navigator.clipboard.writeText(code);
@@ -170,6 +196,16 @@ export default function SavingsReport({ answers, onActionRequested }) {
               </div>
             </div>
           </div>
+
+          <div className="mt-4 pt-3 border-t border-emerald-500/20 flex justify-end">
+            <button
+              type="button"
+              className="button secondary small-btn flex items-center gap-2"
+              onClick={() => handlePrintAuditReport(submittedTicket)}
+            >
+              <Printer size={15} className="text-emerald-400" /> Print / Save Formal Audit Report
+            </button>
+          </div>
         </div>
 
         {/* Embedded Scheduling Section */}
@@ -198,6 +234,15 @@ export default function SavingsReport({ answers, onActionRequested }) {
         <p className="hero-subtext">
           Equivalent to approximately <strong>${totalMonthly.toFixed(0)}/month</strong> in recoverable telecommunications, software redundancies, and payment optimization.
         </p>
+        <div className="mt-3 flex justify-center">
+          <button
+            type="button"
+            className="button secondary small-btn flex items-center gap-2"
+            onClick={() => handlePrintAuditReport()}
+          >
+            <Printer size={14} className="text-primary" /> Print / Save Full Audit Report
+          </button>
+        </div>
       </div>
 
       {/* ── Categorized Savings Breakdown (General terms, no restricted provider names) ── */}

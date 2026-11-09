@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, ClipboardList, MessageSquare, DollarSign, Ticket, FileInput, X, ArrowRight, User, Phone, Mail, Clock, Shield, Zap, ChevronDown, ChevronRight, Unlock, Hash, Pause, Ban, Trash2 } from 'lucide-react';
+import { Search, ClipboardList, MessageSquare, DollarSign, Ticket, FileInput, X, ArrowRight, User, Phone, Mail, Clock, Shield, Zap, ChevronDown, ChevronRight, Unlock, Hash, Pause, Ban, Trash2, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { fetchAllQuotes, subscribeQuotes, updateQuote, insertTicket, convertQuoteToTicket, deleteQuote } from '../api/data';
+import { fetchAllQuotes, subscribeQuotes, updateQuote, insertTicket, convertQuoteToTicket, deleteQuote, generateCostSavingAuditPrint } from '../api/data';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { formatJobType } from '../lib/formatJobType';
 import { generateTicketCode } from '../lib/ticketCode';
@@ -367,7 +367,17 @@ export default function QuoteRequestsPanel() {
                 </p>
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center flex-wrap">
+              {(selectedQuote.service === 'cost-saving-audit' || selectedQuote.request_type === 'audit_action_plan' || selectedQuote.intake?.auditAnswers) && (
+                <button
+                  type="button"
+                  className="button secondary small-btn flex items-center gap-1.5"
+                  onClick={() => generateCostSavingAuditPrint(selectedQuote)}
+                  title="Generate Branded Cost-Saving Audit Report"
+                >
+                  <TrendingUp size={15} className="text-primary" /> Audit Report
+                </button>
+              )}
               <select
                 className={`status-badge big ${(selectedQuote.status || 'pending').toLowerCase().replace(/ /g, '-')}`}
                 value={selectedQuote.status || 'Pending'}
